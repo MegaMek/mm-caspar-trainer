@@ -1,0 +1,12 @@
+numpy
+pandas
+tensorflow
+tensorflow_ranking
+tensorflow-serving-api
+mlflow[extras]
+python-dotenv
+scikit-learn
+tqdm
+optuna
+optuna-integration[tfkeras]
+psutil
