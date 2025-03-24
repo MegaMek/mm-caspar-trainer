@@ -24,20 +24,20 @@
 # Catalyst Game Labs and the Catalyst Game Labs logo are trademarks of
 # InMediaRes Productions, LLC.
 import argparse
+import json
+import os
 
 from dotenv import load_dotenv
 import tensorflow as tf
-import mlflow
 
 from caspar.data.data_loader import load_datasets, load_data_as_numpy_arrays
 from caspar.data import FeatureExtractor
-from caspar.model.model import CasparModel
-from caspar.training.trainer import ModelTrainer
+from caspar.data.feature_extractor import ClassifierFeatureExtractor
+from caspar.model.model import CasparClassificationModel
+from caspar.training.trainer import ClassificationModelTrainer
 from caspar.utils.mlflow_utils import setup_mlflow
-from caspar.config import DATASETS_DIR, MEK_FILE, MODEL_CONFIG, TRAINING_CONFIG, MLFLOW_CONFIG, DOTENV_PATH
-from caspar.hyperparameter_search import optimize_architecture
-from caspar.data.training_dataset_processor import TrainingDatasetProcessor
-
+from caspar.config import DATASETS_DIR, MEK_FILE, MODEL_CONFIG, TRAINING_CONFIG, MLFLOW_CONFIG, DOTENV_PATH, DATA_DIR
+from caspar.data.training_dataset_processor import TrainingDatasetProcessor, ClassificationTrainingDatasetProcessor
 
 load_dotenv(DOTENV_PATH)
 
@@ -94,42 +94,37 @@ def main():
 
     run_name = args.run_name
 
+    # Load class information
+    with open(os.path.join(DATA_DIR, 'class_info.json'), 'r') as f:
+        class_info = json.load(f)
+    num_classes = class_info['num_classes']
+
+    run_name = args.run_name
+
     # Create and compile model
     input_shape = x_train.shape[1]
-    print(f"Extracted {x_train.shape[1]} features for {x_train.shape[0]} samples")
+    print(f"Extracted {input_shape} features for {x_train.shape[0]} samples")
+    print(f"Classification model with {num_classes} movement classes")
     print("Building model...")
-
-    if args.optimize:
-        hidden_layers, best_params = optimize_architecture(args, x_train, y_train, x_val, y_val, n_jobs=args.n_jobs, n_trials=args.n_trials)
-        print("Input shape:", input_shape, "Hidden layers:", input_shape, "x", len(hidden_layers))
-
-        # Create model with best architecture
-        model = CasparModel(
-            input_shape=input_shape,
-            hidden_layers=hidden_layers,
-            dropout_rate=best_params['dropout_rate'],
-        )
-
-        # Use optimized learning rate
-        optimizer = tf.keras.optimizers.legacy.SGD(learning_rate=best_params['learning_rate'], momentum=0.1)
-        model.compile_model(optimizer=optimizer)
-
-    else:
-        print("Input shape:", input_shape, "Hidden layers:", args.hidden_layers)
-        model = CasparModel(
-            input_shape=input_shape,
-            hidden_layers=args.hidden_layers,
-            dropout_rate=args.dropout_rate,
-        )
-        optimizer = tf.keras.optimizers.legacy.SGD(learning_rate=args.learning_rate, momentum=0.9, nesterov=True)
-        model.compile_model(optimizer=optimizer)
+    print("Input shape:", input_shape, "Hidden layers:", args.hidden_layers)
+    model = CasparClassificationModel(
+        input_shape=input_shape,
+        num_classes=num_classes,
+        hidden_layers=args.hidden_layers,
+        dropout_rate=args.dropout_rate,
+    )
+    model.build_model()
+    optimizer = tf.keras.optimizers.legacy.Adagrad(learning_rate=args.learning_rate)
+    model.compile_model(optimizer=optimizer, loss='categorical_crossentropy')
 
     model.summary()
 
     # Train model
-    print("Training model...")
+    print("Training classification model...")
+    class_weights = ClassifierFeatureExtractor.create_class_weights(y_train)
+    print("Class weights:", class_weights)
 
-    trainer = ModelTrainer(
+    trainer = ClassificationModelTrainer(
         model=model,
         experiment_name=args.experiment_name
     )
@@ -141,15 +136,16 @@ def main():
         y_val=y_val,
         epochs=args.epochs,
         batch_size=args.batch_size,
-        model_name=f"CASPAR-00",
+        model_name=f"CASPAR-Classification-00",
         run_name=run_name,
+        class_weight=class_weights
     )
 
 def make_test_train_val_data():
     # Load data
     print(f"Loading data from {DATASETS_DIR}...")
 
-    unit_actions, game_states = load_datasets()
+    unit_actions, game_states, game_boards = load_datasets()
 
     print(f"Loaded {len(unit_actions)} unit actions and {len(game_states)} game states")
 
@@ -161,6 +157,37 @@ def make_test_train_val_data():
     processor.split_and_save()
 
 
+def make_test_train_val_data_classifier():
+    # Load data
+    print(f"Loading data from {DATASETS_DIR}...")
+    unit_actions, game_states, game_boards = load_datasets()
+    print(f"Loaded {len(unit_actions)} unit actions and {len(game_states)} game states")
+
+    # Extract features and classify movements
+    print("Extracting features and classifying movements...")
+    feature_extractor = ClassifierFeatureExtractor()
+    x, y = feature_extractor.extract_classification_features(unit_actions, game_states, game_boards)
+
+    # Save number of classes for model configuration
+    num_classes = feature_extractor.num_classes
+
+    # Process and save the datasets
+    processor = ClassificationTrainingDatasetProcessor(x, y, 0.1, 0.1, 7077)
+    dataset_info = processor.split_and_save()
+    with open(os.path.join(DATA_DIR, 'class_info.json'), 'w') as f:
+        json.dump({
+            'num_classes': num_classes,
+            'class_mapping': feature_extractor.movement_classes
+        }, f)
+
+    print(f"Feature matrix shape: {x.shape}")
+    print(f"Class labels shape: {y.shape}")
+    print(f"Number of movement classes: {num_classes}")
+    print(f"Training data shape: {dataset_info['x_train_shape']}")
+    print(f"Validation data shape: {dataset_info['x_val_shape']}")
+    print(f"Test data shape: {dataset_info['x_test_shape']}")
+
+
 def test():
     x_train, x_val, x_test, y_train, y_val, y_test = load_data_as_numpy_arrays()
 
@@ -169,6 +196,7 @@ def test():
         f.write("private static final double y_test = " + str(y_train[0]) + ";\n")
 
 if __name__ == "__main__":
-    # main()
-    make_test_train_val_data()
-    test()
+    # make_test_train_val_data_classifier()
+    main()
+    # make_test_train_val_data()
+    # test()

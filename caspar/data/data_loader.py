@@ -31,6 +31,7 @@ import re
 import numpy as np
 
 from caspar.config import DATA_DIR, DATASETS_DIR, MEK_FILE
+from caspar.data.game_board import GameBoardRepr
 
 
 class LineType(Enum):
@@ -49,7 +50,7 @@ class LineType(Enum):
 
 class ActionAndState:
     """Container for an action and its corresponding state"""
-    def __init__(self, round_number: int, board: tuple[int, int], action: Dict, state_builders: List):
+    def __init__(self, round_number: int, board: GameBoardRepr, action: Dict, state_builders: List):
         self.round_number = round_number
         self.board = board
         self.action = action
@@ -71,6 +72,7 @@ class DataLoader:
         self._action_and_states = list()
         self.mek_extras_file = mek_extras_file
         self.entities = dict()
+        self.game_board = None
         self.__load_meks_extras()
 
     def __load_meks_extras(self):
@@ -114,6 +116,11 @@ class DataLoader:
         try:
             with open(file_path, 'r') as file:
                 lines = file.readlines()
+                content = ''.join(lines)
+                # Parse the game board first
+                self.game_board = GameBoardRepr(content)
+                print(f"Parsed game board: {self.game_board.width}x{self.game_board.height}")
+
             self._action_and_states = list()
             self.entities = dict()
 
@@ -126,19 +133,6 @@ class DataLoader:
                 if not line:
                     i += 1
                     continue
-
-                if line == LineType.BOARD.value:
-                    i += 1
-                    board_info = lines[i].strip()
-                    """
-                    example
-                    BOARD_NAME	WIDTH	HEIGHT
-                    Board #0	32	34
-                    """
-                    _, width, height  = board_info.split('\t')
-                    width = int(width.strip())
-                    height = int(height.strip())
-                    board = (width, height)
 
                 # Check for action headers
                 if (line == LineType.MOVE_ACTION_HEADER_V1.value or
@@ -189,7 +183,7 @@ class DataLoader:
                     if current_round is None:
                         raise RuntimeError("State block has no valid states")
 
-                    self._action_and_states.append(ActionAndState(current_round, board, action, states))
+                    self._action_and_states.append(ActionAndState(current_round, self.game_board, action, states))
 
                     # We're now at the next action header or at the end
                     continue
@@ -209,7 +203,7 @@ class DataLoader:
             return pattern.match(line) is not None
         return line.startswith(pattern)
 
-    def get_actions_and_states(self) -> Tuple[List[Dict], List[List[Dict]]]:
+    def get_actions_and_states(self) -> Tuple[List[Dict], List[List[Dict]], List[GameBoardRepr]]:
         """
         Returns the parsed actions and states in a format similar to the load_data method.
 
@@ -218,12 +212,12 @@ class DataLoader:
         """
         unit_actions = []
         game_states = []
-
+        game_boards = []
         for action_and_state in self._action_and_states:
             unit_actions.append(action_and_state.action)
             game_states.append(action_and_state.states)
-
-        return unit_actions, game_states
+            game_boards.append(action_and_state.board)
+        return unit_actions, game_states, game_boards
 
     def _parse_unit_action(self, data: List[str]) -> Dict:
         """
@@ -358,15 +352,17 @@ class DelayedUnitStateBuilder:
 def load_datasets():
     game_states = []
     unit_actions = []
+    game_boards = []
     data_loader = DataLoader(MEK_FILE)
     # Process each path in args.data
     for path in [DATASETS_DIR]:
         if os.path.isfile(path):
             # Process a single file
             try:
-                loaded_unit_actions, loaded_game_states = data_loader.parse(path).get_actions_and_states()
+                loaded_unit_actions, loaded_game_states, loaded_game_boards = data_loader.parse(path).get_actions_and_states()
                 unit_actions.extend(loaded_unit_actions)
                 game_states.extend(loaded_game_states)
+                game_boards.append(loaded_game_boards)
                 print(f"Loaded file: {path}")
             except Exception as e:
                 print(f"Failed to load {path}: {str(e)}")
@@ -376,16 +372,17 @@ def load_datasets():
                 for file in files:
                     file_path = os.path.join(root, file)
                     try:
-                        loaded_unit_actions, loaded_game_states = data_loader.parse(file_path).get_actions_and_states()
+                        loaded_unit_actions, loaded_game_states, loaded_game_boards = data_loader.parse(path).get_actions_and_states()
                         unit_actions.extend(loaded_unit_actions)
                         game_states.extend(loaded_game_states)
+                        game_boards.append(loaded_game_boards)
                         print(f"Loaded file: {file_path}")
                     except Exception as e:
                         print(f"Failed to load {file_path}: {str(e)}")
         else:
             print(f"Path not found: {path}")
 
-    return unit_actions, game_states
+    return unit_actions, game_states, game_boards
 
 
 def load_data_as_numpy_arrays():

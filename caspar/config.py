@@ -36,20 +36,20 @@ DOTENV_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 
 # Model settings
 MODEL_CONFIG = {
-    "hidden_layers": [354, 354, 354, 354],
-    "dropout_rate": 0.06,
-    "learning_rate": 0.01
+    "hidden_layers": [354, 708],
+    "dropout_rate": 0.3,
+    "learning_rate": 0.1
 }
 
 # Training settings
 TRAINING_CONFIG = {
     "test_size": 0.1,
     "epochs": 100,
-    "batch_size": 34,
+    "batch_size": 16,
 }
 
 # MlFlow settings
 MLFLOW_CONFIG = {
     "tracking_uri": os.environ.get("MLFLOW_TRACKING_URI", None),
-    "experiment_name": "04-ffnn"
+    "experiment_name": "00-classifier-ffnn"
 }

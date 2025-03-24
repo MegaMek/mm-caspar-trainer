@@ -29,6 +29,9 @@ import numpy as np
 import math
 from tqdm import tqdm
 
+from caspar.data.game_board import GameBoardRepr
+
+
 def clamp01(value: float) -> float:
     return max(min(value, 1), 0)
 
@@ -99,7 +102,7 @@ class FeatureExtractor:
         'GunEmplacement', 'BattleArmor'}
 
     def extract_features(
-            self, unit_actions: List[Dict], game_states: List[List[Dict]]
+            self, unit_actions: List[Dict], game_states: List[List[Dict]], game_boards: List[GameBoardRepr]
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Extract features from unit actions and game states.
@@ -107,6 +110,7 @@ class FeatureExtractor:
         Args:
             unit_actions: List of unit action dictionaries
             game_states: List of game state dictionaries
+            game_boards: List of game board representations
 
         Returns:
             X: Feature matrix
@@ -114,17 +118,16 @@ class FeatureExtractor:
         """
         if len(unit_actions) != len(game_states):
             raise ValueError("Number of unit actions must match number of game states")
-        size = len(list(filter(lambda g: self.filter_actions(g), unit_actions)))
+        size = len(unit_actions)
         x = np.zeros((size, self.num_features))
         y = np.zeros(size)
 
-        for i, (action, state) in enumerate(tqdm(zip(unit_actions, game_states))):
-            if action.get("is_bot", 0) == 1:
+        for i, (action, state, game_board) in enumerate(tqdm(zip(unit_actions, game_states, game_boards))):
+            if not self.filter_actions(action):
                 continue
 
             if i >= len(x):
                 break
-
             state = {unit["entity_id"]: unit for unit in state}
 
             # Basic features directly from unit action
@@ -538,7 +541,7 @@ class FeatureExtractor:
         return clamp01(enemy_count * 0.7 + allies_count * 0.3)
 
     @classmethod
-    def _threatening_enemies(cls, action, state) -> set[dict]:
+    def _threatening_enemies(cls, action, state) -> list[dict]:
         unit_x = action.get("to_x", action.get("from_x", 0))
         unit_y = action.get("to_y", action.get("from_y", 0))
         team_id = action.get("team_id", -2)
@@ -2241,8 +2244,278 @@ class FeatureExtractor:
         return reward
 
     @classmethod
-    def calculate_distance(cls, unit1, unit2):
-        # Hex grid distance calculation
-        dx = unit1['x'] - unit2['x']
-        dy = unit1['y'] - unit2['y']
-        return max(abs(dx), abs(dy))
+    def calculate_distance(cls, p1, p2, p3=None, p4=None):
+        if isinstance(p1, dict):
+            unit1 = p1
+            unit2 = p2
+            # Hex grid distance calculation
+            dx = unit1['x'] - unit2['x']
+            dy = unit1['y'] - unit2['y']
+        else:
+            x1, y1 = p1, p2
+            x2, y2 = p3, p4
+            # Hex grid distance calculation
+            dx = x1 - x2
+            dy = y1 - y2
+        return np.sqrt(dx ** 2 + dy ** 2)
+
+class ClassifierFeatureExtractor(FeatureExtractor):
+    """
+      Extends the FeatureExtractor to add movement classification capabilities.
+      """
+    # Movement class constants
+    AGGRESSIVE_ADVANCE = "AGGRESSIVE_ADVANCE"
+    STRATEGIC_WITHDRAWAL = "STRATEGIC_WITHDRAWAL"
+    FLANKING_MANEUVER = "FLANKING_MANEUVER"
+    DEFENSIVE_POSITIONING = "DEFENSIVE_POSITIONING"
+    FORMATION_MAINTENANCE = "FORMATION_MAINTENANCE"
+    SCOUTING = "SCOUTING"
+    FIRE_SUPPORT = "FIRE_SUPPORT"
+    COVER_PROVISION = "COVER_PROVISION"
+    OBJECTIVE_SECURING = "OBJECTIVE_SECURING"
+
+    # Secondary property constants
+    HEAT_MANAGEMENT = "HEAT_MANAGEMENT"
+    TERRAIN_EXPLOITATION = "TERRAIN_EXPLOITATION"
+    LOS_CONTROL = "LOS_CONTROL"
+
+    def __init__(self):
+        super().__init__()
+        # Define class mapping for one-hot encoding
+        self.movement_classes = {
+            self.AGGRESSIVE_ADVANCE: 0,
+            self.STRATEGIC_WITHDRAWAL: 1,
+            self.FLANKING_MANEUVER: 2,
+            self.DEFENSIVE_POSITIONING: 3,
+            self.FORMATION_MAINTENANCE: 4,
+            self.SCOUTING: 5,
+            self.FIRE_SUPPORT: 6,
+            self.COVER_PROVISION: 7,
+            self.OBJECTIVE_SECURING: 8
+        }
+
+        # Number of classes for model output
+        self.num_classes = len(self.movement_classes)
+
+    @staticmethod
+    def create_class_weights(y_train):
+        """
+        Calculate class weights based on class frequencies.
+        This helps address class imbalance issues.
+
+        Args:
+            y_train: One-hot encoded class labels
+
+        Returns:
+            Dictionary mapping class indices to weights
+        """
+        # Convert one-hot encoded labels to class indices
+        if len(y_train.shape) > 1:
+            y_indices = np.argmax(y_train, axis=1)
+        else:
+            y_indices = y_train
+
+        # Calculate class counts
+        class_counts = np.bincount(y_indices)
+
+        # Calculate class weights
+        n_samples = len(y_indices)
+        n_classes = len(class_counts)
+
+        class_weights = {}
+        for i in range(n_classes):
+            # Prevent division by zero
+            if class_counts[i] > 0:
+                # Higher weight for less frequent classes
+                class_weights[i] = n_samples / (n_classes * class_counts[i])
+            else:
+                class_weights[i] = 1.0
+
+        return class_weights
+
+    def extract_classification_features(self, unit_actions, game_states, game_boards):
+        """
+        Extract features and classify movements for unit actions and game states.
+
+        Args:
+            unit_actions: List of unit action dictionaries
+            game_states: List of game state dictionaries
+
+        Returns:
+            X: Feature matrix
+            y: One-hot encoded class labels
+        """
+        # First extract basic features using parent class method
+        x, _ = super().extract_features(unit_actions, game_states, game_boards)
+
+        # Initialize class labels array
+        y = np.zeros((x.shape[0], self.num_classes))
+
+        for i, (action, state, game_board) in enumerate(zip(unit_actions, game_states, game_boards)):
+            if i >= len(x):
+                break
+
+            # Convert state list to dictionary for easier access
+            state_dict = {unit["entity_id"]: unit for unit in state}
+
+            # Classify the movement
+            primary_class, secondary_properties = self._classify_movement(action, state_dict, game_board)
+
+            # Set the appropriate class in one-hot encoded array
+            class_index = self.movement_classes.get(primary_class, 0)
+            y[i, class_index] = 1.0
+
+        return x, y
+
+    def _classify_movement(self, action, state, game_board):
+        """
+        Determine the class of a movement based on action and state data.
+
+        Args:
+            action: Dictionary containing the movement action
+            state: Dictionary containing unit states (entity_id -> unit state)
+            game_board: Game board data
+
+        Returns:
+            primary_class: String indicating the primary movement class
+            secondary_properties: List of secondary movement properties
+        """
+        # Extract relevant features
+        unit_id = action.get("entity_id", -1)
+        team_id = action.get("team_id", -2)
+        from_x, from_y = action.get("from_x", 0), action.get("from_y", 0)
+        to_x, to_y = action.get("to_x", 0), action.get("to_y", 0)
+        unit_role = action.get("role", "NONE")
+
+        # Calculate health percentage
+        health_percentage = (action.get("armor_p", 0) + action.get("internal_p", 0)) / 2
+
+        # Find enemy and allied units
+        enemies = [u for u in state.values() if u.get("team_id", -1) != team_id]
+        allies = [u for u in state.values()
+                  if u.get("team_id", -1) == team_id and u.get("entity_id", -1) != unit_id]
+
+        # Calculate distances
+        old_closest_enemy_dist = min([self.calculate_distance(from_x, from_y, e.get("x", 0), e.get("y", 0))
+                                      for e in enemies], default=float('inf'))
+        new_closest_enemy_dist = min([self.calculate_distance(to_x, to_y, e.get("x", 0), e.get("y", 0))
+                                      for e in enemies], default=float('inf'))
+
+        # Team centroid
+        if allies:
+            team_x = sum(a.get("x", 0) for a in allies) / len(allies)
+            team_y = sum(a.get("y", 0) for a in allies) / len(allies)
+
+            # Distance to team centroid
+            old_team_dist = self.calculate_distance(from_x, from_y, team_x, team_y)
+            new_team_dist = self.calculate_distance(to_x, to_y, team_x, team_y)
+        else:
+            old_team_dist = 0
+            new_team_dist = 0
+
+        # Determine primary class based on movement patterns
+        primary_class = None
+        secondary_properties = []
+
+        if new_closest_enemy_dist < old_closest_enemy_dist:
+            if unit_role in ["JUGGERNAUT", "BRAWLER"]:
+                primary_class = self.AGGRESSIVE_ADVANCE
+            elif unit_role in ["STRIKER", "SKIRMISHER"] and new_closest_enemy_dist <= action.get("max_range", 20) * 0.7:
+                primary_class = self.AGGRESSIVE_ADVANCE
+            elif self._check_flanking_position(action, state):
+                primary_class = self.FLANKING_MANEUVER
+            else:
+                primary_class = self.AGGRESSIVE_ADVANCE
+        elif new_closest_enemy_dist > old_closest_enemy_dist:
+            if health_percentage < 0.5 or action.get("crippled", 0) == 1:
+                primary_class = self.STRATEGIC_WITHDRAWAL
+            elif unit_role in ["SNIPER", "MISSILE_BOAT"] and new_closest_enemy_dist > action.get("max_range", 20) * 0.5:
+                primary_class = self.FIRE_SUPPORT
+            else:
+                primary_class = self.STRATEGIC_WITHDRAWAL
+        elif allies and new_team_dist < old_team_dist and old_team_dist > 5:
+            primary_class = self.FORMATION_MAINTENANCE
+        elif unit_role == "SCOUT" and allies and new_team_dist > old_team_dist:
+            primary_class = self.SCOUTING
+        elif self._check_defensive_position(action, state):
+            primary_class = self.DEFENSIVE_POSITIONING
+        elif self._check_covering_position(action, state, allies):
+            primary_class = self.COVER_PROVISION
+        else:
+            # Default class based on role and position
+            if unit_role in ["SNIPER", "MISSILE_BOAT"]:
+                primary_class = self.FIRE_SUPPORT
+            elif unit_role in ["SCOUT"]:
+                primary_class = self.SCOUTING
+            elif unit_role in ["STRIKER", "SKIRMISHER"]:
+                primary_class = self.FLANKING_MANEUVER
+            elif unit_role in ["JUGGERNAUT", "BRAWLER"]:
+                primary_class = self.AGGRESSIVE_ADVANCE
+            else:
+                primary_class = self.FORMATION_MAINTENANCE
+
+        # Determine secondary properties
+        if action.get("heat_p", 0) > 0.7 and action.get("jumping", 0) == 0:
+            secondary_properties.append(self.HEAT_MANAGEMENT)
+
+        # Check for terrain exploitation
+        if self._check_terrain_exploitation(action, state):
+            secondary_properties.append(self.TERRAIN_EXPLOITATION)
+
+        # Check for line of sight control
+        if self._check_line_of_sight_control(action, state):
+            secondary_properties.append(self.LOS_CONTROL)
+
+        return primary_class, secondary_properties
+
+    def _check_flanking_position(self, action, state):
+        """
+        Check if the movement is a flanking maneuver.
+
+        This would check if the unit moved to a position that targets enemy sides/rear.
+        Uses the flanking position feature that's already being calculated.
+        """
+        flanking_score = self._calculate_flanking_position(action, state)
+        return flanking_score > 0.7  # Consider high flanking scores as flanking maneuvers
+
+    def _check_defensive_position(self, action, state):
+        """
+        Check if the movement puts the unit in a defensive position.
+
+        Uses the cover value feature that's already being calculated.
+        """
+        cover_value = self._calculate_cover(action, state)
+        return cover_value > 0.7  # Consider high cover values as defensive positions
+
+    def _check_covering_position(self, action, state, allies):
+        """
+        Check if the movement puts the unit in position to cover allies.
+
+        Uses the covering units feature that's already being calculated.
+        """
+        covering_score = self._calculate_covering_units(action, state)
+        return covering_score > 0.7  # Consider high covering scores as covering positions
+
+    def _check_terrain_exploitation(self, action, state):
+        """
+        Check if the movement exploits terrain features.
+
+        Uses the environmental cover feature that's already being calculated.
+        """
+        terrain_score = self._calculate_environmental_cover(action, state)
+        return terrain_score > 0.7  # Consider high environmental cover as terrain exploitation
+
+    def _check_line_of_sight_control(self, action, state):
+        """
+        Check if the movement is meant to control line of sight.
+
+        This is a more complex determination that could look at position changes
+        relative to enemies and allies.
+        """
+        # Placeholder implementation - could be enhanced based on your game mechanics
+        # A simple check might be if the unit moved to a position where it can see enemies
+        # but they can't easily see it (e.g., behind cover with good firing lines)
+        cover = self._calculate_cover(action, state)
+        enemies_in_range = self._calculate_enemy_in_range(action, state)
+
+        return cover > 0.5 and enemies_in_range > 0.7  # Can see enemies but has some cover

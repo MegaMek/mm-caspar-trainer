@@ -54,33 +54,60 @@ class TrainingDatasetProcessor:
         np.save(DATA_DIR + '/y_test.npy', y_test)
         print("Saved training and test datasets to data directory")
 
-    def apply_normalization_factor(self, x: np.ndarray, factor: np.ndarray):
-        if len(x.shape) == 1:
-            x[:] *= factor[0]
-            return x
 
-        for i in range(x.shape[1]):
-            x[:, i] *= factor[i]
-        return x
+class ClassificationTrainingDatasetProcessor(TrainingDatasetProcessor):
+    """
+    Extends the TrainingDatasetProcessor to handle classification data.
+    """
 
-    def min_max_normalize_factor(self, x: np.ndarray) -> float:
-        max_value = x.max()
-        min_value = x.min()
-        if max_value == min_value:
-            return 1
-        return 1 / (max_value - min_value)
+    def __init__(self, x: np.ndarray, y: np.ndarray, test_percentage, validation_percentage, random_state):
+        """
+        Initialize the processor.
 
-    def normalize_minmax(self, x: np.ndarray) :
-        if len(x.shape) == 1 :
-            minmax_factor = np.zeros(1)
-            minmax_factor[0] = self.min_max_normalize_factor(x)
-            x[:] *= minmax_factor[0]
+        Args:
+            x: Feature matrix
+            y: One-hot encoded class labels
+            test_percentage: Percentage of data to use for testing
+            validation_percentage: Percentage of training data to use for validation
+            random_state: Random state for reproducibility
+        """
+        super().__init__(x, y, test_percentage, validation_percentage, random_state)
 
-            return x, minmax_factor
-        else:
-            minmax_factor = np.zeros(x.shape[1])
-            for i in range(x.shape[1]):
-                minmax_factor[i] = self.min_max_normalize_factor(x[:, i])
-                x[:, i] *= minmax_factor[i]
+    def split_and_save(self):
+        """
+        Split the data into training, validation, and test sets and save them.
+        """
+        # Remove all indices from X that sum to 0
+        # and remove the corresponding entries from Y
+        non_zero_indices = ~np.all(self.y == 0, axis=1)
+        clean_x = self.x[non_zero_indices]
+        clean_y = self.y[non_zero_indices]
 
-            return x, minmax_factor
+        # Split data into training, validation, and test sets
+        x_train, x_test, y_train, y_test = train_test_split(
+            clean_x, clean_y, test_size=self.test_percentage, random_state=self.random_state
+        )
+
+        x_train, x_val, y_train, y_val = train_test_split(
+            x_train, y_train, test_size=self.validation_percentage, random_state=self.random_state
+        )
+
+        # Save the datasets
+        np.save(DATA_DIR + '/x_train.npy', x_train)
+        np.save(DATA_DIR + '/x_val.npy', x_val)
+        np.save(DATA_DIR + '/x_test.npy', x_test)
+        np.save(DATA_DIR + '/y_train.npy', y_train)
+        np.save(DATA_DIR + '/y_val.npy', y_val)
+        np.save(DATA_DIR + '/y_test.npy', y_test)
+
+        print("Saved training, validation, and test datasets to data directory")
+
+        # Return information about the datasets
+        return {
+            'x_train_shape': x_train.shape,
+            'y_train_shape': y_train.shape,
+            'x_val_shape': x_val.shape,
+            'y_val_shape': y_val.shape,
+            'x_test_shape': x_test.shape,
+            'y_test_shape': y_test.shape
+        }
