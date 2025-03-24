@@ -101,7 +101,9 @@ class ModelTrainer:
             self.mlflow_setup_log(batch_size, epochs, hyperparams)
 
             checkpoint_dir = os.path.join(CHECKPOINT_DIR, f"{run.info.run_id}")
+            model_dir = os.path.join(os.path.join(CHECKPOINT_DIR, f"{run.info.run_id}"), "model")
             os.makedirs(checkpoint_dir, exist_ok=True)
+            os.makedirs(model_dir, exist_ok=True)
             checkpoint_path = os.path.join(checkpoint_dir, "model_epoch_{epoch:04d}_val_loss_{val_loss:.4f}.h5")
             # Set up early stopping
             checkout_callback = tf.keras.callbacks.ModelCheckpoint(
@@ -139,7 +141,7 @@ class ModelTrainer:
                 signature=self.model.get_mlflow_signature()
             )
             mlflow.register_model(model_uri, model_name)
-
+            mlflow.tensorflow.save_model(self.model.model, model_dir)
             return history
 
     def mlflow_setup_log(self, batch_size, epochs, hyperparams):

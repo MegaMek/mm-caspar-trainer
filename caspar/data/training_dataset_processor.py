@@ -38,7 +38,12 @@ class TrainingDatasetProcessor:
         self.random_state = random_state
 
     def split_and_save(self):
-        x_train, x_test, y_train, y_test = train_test_split(self.x, self.y, test_size=self.test_percentage, random_state=self.random_state)
+        # remove all indices from X that sum to 0
+        # and remove the corresponding entries from Y
+        clean_x = self.x[~np.all(self.x == 0, axis=1)]
+        clean_y = self.y[~np.all(self.x == 0, axis=1)]
+
+        x_train, x_test, y_train, y_test = train_test_split(clean_x, clean_y, test_size=self.test_percentage, random_state=self.random_state)
         x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=self.validation_percentage, random_state=self.random_state)
 
         np.save(DATA_DIR + '/x_train.npy', x_train)

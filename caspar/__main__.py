@@ -27,6 +27,7 @@ import argparse
 
 from dotenv import load_dotenv
 import tensorflow as tf
+import mlflow
 
 from caspar.data.data_loader import load_datasets, load_data_as_numpy_arrays
 from caspar.data import FeatureExtractor
@@ -47,8 +48,6 @@ def parse_args():
                         help='Path to Mek file (txt)')
     parser.add_argument('--data', action='store_true',
                         help='Recompile the datasets')
-    parser.add_argument('--convert-model', type=str, required=False,
-                        help='Convert a specific model `name` to tflite so it can be used in the game')
     parser.add_argument('--epochs', type=int, default=TRAINING_CONFIG['epochs'],
                         help='Number of training epochs')
     parser.add_argument('--dropout-rate', type=float, default=MODEL_CONFIG['dropout_rate'],
@@ -90,10 +89,6 @@ def main():
         print("Finished compiling datasets")
         return
 
-    if args.convert_model:
-        convert_data(args.convert_model)
-        print("Finished converting data")
-        return
 
     x_train, x_val, x_test, y_train, y_val, y_test = load_data_as_numpy_arrays()
 
@@ -166,15 +161,14 @@ def make_test_train_val_data():
     processor.split_and_save()
 
 
-def convert_data(model_name):
-    # Convert the model
-    converter = tf.lite.TFLiteConverter.from_saved_model("models:/" + model_name)
-    tflite_model = converter.convert()
+def test():
+    x_train, x_val, x_test, y_train, y_val, y_test = load_data_as_numpy_arrays()
 
-    # Save the model.
-    with open(model_name + '.tflite', 'wb') as f:
-        f.write(tflite_model)
-
+    with open('../checkpoints/single_input.txt', 'w') as f:
+        f.write("private static final double[] x_test = new double[]{" + ", ".join(map(str, x_train[0])) + "};\n")
+        f.write("private static final double y_test = " + str(y_train[0]) + ";\n")
 
 if __name__ == "__main__":
-    main()
+    # main()
+    make_test_train_val_data()
+    test()

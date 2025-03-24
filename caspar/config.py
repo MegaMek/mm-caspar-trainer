@@ -23,6 +23,7 @@
 #
 # Catalyst Game Labs and the Catalyst Game Labs logo are trademarks of
 # InMediaRes Productions, LLC.
+
 import os
 
 # Data settings
@@ -30,7 +31,7 @@ RESOURCES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resour
 DATASETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "datasets")
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 CHECKPOINT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "checkpoints")
-MEK_FILE = os.path.join(RESOURCES_DIR, "meks.txt")
+MEK_FILE = os.path.join(RESOURCES_DIR, "meks.tsv")
 DOTENV_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 
 # Model settings
@@ -50,5 +51,5 @@ TRAINING_CONFIG = {
 # MlFlow settings
 MLFLOW_CONFIG = {
     "tracking_uri": os.environ.get("MLFLOW_TRACKING_URI", None),
-    "experiment_name": "00-ffnn"
+    "experiment_name": "04-ffnn"
 }
