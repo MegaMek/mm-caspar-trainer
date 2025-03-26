@@ -24,7 +24,8 @@
 # Catalyst Game Labs and the Catalyst Game Labs logo are trademarks of
 # InMediaRes Productions, LLC.
 import os
-from typing import Tuple, List, Dict
+import math
+from typing import Tuple, List, Dict, Union
 from enum import Enum
 import re
 
@@ -33,6 +34,9 @@ import numpy as np
 from caspar.config import DATA_DIR, DATASETS_DIR, MEK_FILE
 from caspar.data.game_board import GameBoardRepr
 
+import logging
+
+logger = logging.getLogger(__name__)
 
 class LineType(Enum):
     """Enum for different header types in the dataset file"""
@@ -183,7 +187,7 @@ class DataLoader:
                     if current_round is None:
                         raise RuntimeError("State block has no valid states")
 
-                    self._action_and_states.append(ActionAndState(current_round, self.game_board, action, states))
+                    self._action_and_states.append(ActionAndState(current_round, None, action, states))
 
                     # We're now at the next action header or at the end
                     continue
@@ -203,7 +207,7 @@ class DataLoader:
             return pattern.match(line) is not None
         return line.startswith(pattern)
 
-    def get_actions_and_states(self) -> Tuple[List[Dict], List[List[Dict]], List[GameBoardRepr]]:
+    def get_actions_and_states(self, as_dict: bool = True) -> Tuple[List[Dict], List[List[Dict]], Union[GameBoardRepr, Dict]]:
         """
         Returns the parsed actions and states in a format similar to the load_data method.
 
@@ -212,12 +216,12 @@ class DataLoader:
         """
         unit_actions = []
         game_states = []
-        game_boards = []
+        game_board = self.game_board.to_dict() if as_dict else self.game_board
         for action_and_state in self._action_and_states:
             unit_actions.append(action_and_state.action)
             game_states.append(action_and_state.states)
-            game_boards.append(action_and_state.board)
-        return unit_actions, game_states, game_boards
+
+        return unit_actions, game_states, game_board
 
     def _parse_unit_action(self, data: List[str]) -> Dict:
         """
@@ -235,42 +239,44 @@ class DataLoader:
         mek = self.meks_extras.get(f'{data[2]} {data[3]}', {})
 
         action = {
-            'player_id': int(data[0]),
-            'entity_id': int(data[1]),
+            'player_id': to_int(data[0]),
+            'entity_id': to_int(data[1]),
             'chassis': data[2],
             'model': data[3],
-            'facing': int(data[4]),
-            'from_x': int(data[5]),
-            'from_y': int(data[6]),
-            'x': int(data[5]),
-            'y': int(data[6]),
-            'to_x': int(data[7]),
-            'to_y': int(data[8]),
-            'hexes_moved': int(data[9]),
-            'distance': int(data[10]),
-            'mp_used': int(data[11]),
-            'mp': int(data[11]),
-            'max_mp': int(data[12]),
-            'mp_p': float(data[13]),
-            'heat_p': float(data[14]),
-            'armor_p': float(data[15]),
-            'internal_p': float(data[16]),
-            'jumping': int(data[17]),
-            'prone': int(data[18]),
-            'legal': int(data[19]),
+            'facing': to_int(data[4]),
+            'from_x': to_int(data[5]),
+            'from_y': to_int(data[6]),
+            'x': to_int(data[5]),
+            'y': to_int(data[6]),
+            'to_x': to_int(data[7]),
+            'to_y': to_int(data[8]),
+            'hexes_moved': to_int(data[9]),
+            'distance': to_int(data[10]),
+            'mp_used': to_int(data[11]),
+            'mp': to_int(data[11]),
+            'max_mp': to_int(data[12]),
+            'mp_p': to_float(data[13].replace(',', '.')),
+            'heat_p': to_float(data[14].replace(',', '.')),
+            'armor_p': to_float(data[15].replace(',', '.')),
+            'internal_p': to_float(data[16].replace(',', '.')),
+            'jumping': to_int(data[17]),
+            'prone': to_int(data[18]),
+            'legal': to_int(data[19]),
             'steps': data[20] if len(data) > 20 else "",
-            'team_id': int(data[21]) if len(data) > 21 else 0,
-            'chance_of_failure': float(data[22]) if len(data) > 22 else 0.0,
-            'is_bot': int(data[23]) if len(data) > 23 else 0,
+            'team_id': to_int(data[21]) if len(data) > 21 else 0,
+            'chance_of_failure': to_float(data[22].replace(',', '.')) if len(data) > 22 else 0.0,
+            'is_bot': to_int(data[23]) if len(data) > 23 else 0,
             'armor': mek.get("armor", -1),
             'internal': mek.get("internal", -1),
             'max_range': mek.get("max_range", -1),
             'total_damage': mek.get("total_damage", -1),
             'ecm': mek.get("ecm", 0),
-            'type': mek.get('role', None),
+            'type': mek.get('type', None),
             'role': mek.get('role', None),
-            'bv': mek.get('bv', -1)
+            'bv':  mek.get('bv', -1)
         }
+
+
         self.entities[action['entity_id']] = action
         return action
 
@@ -305,7 +311,7 @@ class DelayedUnitStateBuilder:
             action = self.data_loader.entities.get(int(data[2]), None)
         mek = {}
         chassis = data[4]
-        model = None
+        model = data[5]
         if not action:
             for key in self.data_loader.meks_extras.keys():
                 if key.startswith(chassis):
@@ -313,40 +319,42 @@ class DelayedUnitStateBuilder:
                     model = key.split(chassis, 1)[-1]
                     break
         else:
-            model = action["model"]
-            mek = self.data_loader.meks_extras[f'{chassis} {model}']
+            if model == chassis:
+                model = action["model"]
+            mek = self.data_loader.meks_extras.get(f'{chassis} {model}', {})
 
         return {
-            'round': int(data[0]),
+            'round': to_int(data[0]),
             'phase': data[1],
-            'player_id': int(data[2]),
-            'entity_id': int(data[3]),
+            'player_id': to_int(data[2]),
+            'entity_id': to_int(data[3]),
             'chassis': chassis,
             'model': model,
             'type': data[6],
             'role': data[7],
-            'x': int(data[8]),
-            'y': int(data[9]),
-            'facing': int(data[10]),
-            'mp': float(data[11]),
-            'heat': float(data[12]),
-            'heat_p': float(data[12]) / (40 if "Mek" in data[6] else 999),
-            'prone': int(data[13]),
-            'airborne': int(data[14]),
-            'off_board': int(data[15]),
-            'crippled': int(data[16]),
-            'destroyed': int(data[17]),
-            'armor_p': float(data[18]),
-            'internal_p': float(data[19]),
-            'done': int(data[20]),
-            'team_id': int(data[23]),
-            'armor': mek.get("armor", -1),
-            'internal': mek.get("internal", -1),
-            'max_range': mek.get("max_range", -1),
-            'total_damage': mek.get("total_damage", -1),
-            'ecm': mek.get("ecm", 0),
-            'bv': mek.get('bv', -1)
+            'x': to_int(data[8]),
+            'y': to_int(data[9]),
+            'facing': to_int(data[10]),
+            'mp': to_float(data[11]),
+            'heat': to_float(data[12]),
+            'heat_p': to_float(data[12]) / (40 if "Mek" in data[6] else 999),
+            'prone': to_int(data[13]),
+            'airborne': to_int(data[14]),
+            'off_board': to_int(data[15]),
+            'crippled': to_int(data[16]),
+            'destroyed': to_int(data[17]),
+            'armor_p': to_float(data[18]),
+            'internal_p': to_float(data[19]),
+            'done': to_int(data[20]),
+            'max_range': to_int(data[21]) if len(data) > 21 else mek.get("max_range", 9),
+            'total_damage': to_int(data[22]) if len(data) > 22 else mek.get("total_damage", 25),
+            'team_id': to_int(data[23]) if len(data) > 23 else 2,
+            'armor': to_int(data[24]) if len(data) > 24 else mek.get("armor", 40),
+            'internal': to_int(data[25]) if len(data) > 25 else mek.get("internal", 30),
+            'bv': to_int(data[26]) if len(data) > 26 else mek.get('bv', 900),
+            'ecm': to_int(data[27]) if len(data) > 27 else mek.get("ecm", 0),
         }
+
 
 
 def load_datasets():
@@ -354,33 +362,22 @@ def load_datasets():
     unit_actions = []
     game_boards = []
     data_loader = DataLoader(MEK_FILE)
-    # Process each path in args.data
-    for path in [DATASETS_DIR]:
-        if os.path.isfile(path):
-            # Process a single file
+    i = 0
+    for root, _, files in os.walk(DATASETS_DIR):
+        for file in files:
+            file_path = os.path.join(root, file)
             try:
-                loaded_unit_actions, loaded_game_states, loaded_game_boards = data_loader.parse(path).get_actions_and_states()
-                unit_actions.extend(loaded_unit_actions)
-                game_states.extend(loaded_game_states)
-                game_boards.append(loaded_game_boards)
-                print(f"Loaded file: {path}")
+                loaded_unit_actions, loaded_game_states, loaded_game_board = data_loader.parse(file_path).get_actions_and_states()
+                if len(loaded_game_states) == 0:
+                    continue
+                unit_actions.append((i, loaded_unit_actions))
+                game_states.append((i, loaded_game_states))
+                game_boards.append((i, loaded_game_board))
+                print(f"Loaded {i} - Loaded file: {file_path}")
+                i += 1
             except Exception as e:
-                print(f"Failed to load {path}: {str(e)}")
-        elif os.path.isdir(path):
-            # Walk through directory and process all files
-            for root, _, files in os.walk(path):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    try:
-                        loaded_unit_actions, loaded_game_states, loaded_game_boards = data_loader.parse(path).get_actions_and_states()
-                        unit_actions.extend(loaded_unit_actions)
-                        game_states.extend(loaded_game_states)
-                        game_boards.append(loaded_game_boards)
-                        print(f"Loaded file: {file_path}")
-                    except Exception as e:
-                        print(f"Failed to load {file_path}: {str(e)}")
-        else:
-            print(f"Path not found: {path}")
+                logger.error("Error when reading thing", e)
+                print(f"Failed to load {file_path}: {str(e)}")
 
     return unit_actions, game_states, game_boards
 
@@ -395,3 +392,13 @@ def load_data_as_numpy_arrays():
     y_test = np.load(DATA_DIR + '/y_test.npy')
 
     return x_train, x_val, x_test, y_train, y_val, y_test
+
+
+def to_float(value: str) -> float:
+    value = float(value.replace(',', '.'))
+    if math.isnan(value):
+        return 10.0
+    return value
+
+def to_int(value: str) -> int:
+    return int(to_float(value))

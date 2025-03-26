@@ -197,6 +197,14 @@ def test():
 
 if __name__ == "__main__":
     # make_test_train_val_data_classifier()
-    main()
+    # main()
     # make_test_train_val_data()
     # test()
+
+    unit_actions, game_states, game_boards = load_datasets()
+    with open('game_log.json', 'w') as f:
+        json.dump({
+            "unitActions": unit_actions[0][1],
+            "gameStates": game_states[0][1],
+            "gameBoard": game_boards[0][1]},
+            f)

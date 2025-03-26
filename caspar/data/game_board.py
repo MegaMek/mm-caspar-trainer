@@ -101,8 +101,8 @@ class GameBoardRepr:
                 dim_line = lines[i + 1]
                 parts = dim_line.split('\t')
                 if len(parts) >= 3:
-                    self.width = int(parts[1])
-                    self.height = int(parts[2])
+                    self.width = int(parts[2]) # I inverted them both :facepalm:
+                    self.height = int(parts[1]) # I inverted them both :facepalm:
                 break
 
         # Initialize empty board
@@ -117,20 +117,15 @@ class GameBoardRepr:
 
         # Process each row
         for y in range(self.height):
-            if row_start + y >= len(lines):
-                break
-
             row_line = lines[row_start + y]
-            if not row_line.startswith(f"ROW_{y}"):
-                continue
-
             # Split the row by tabs
             cells = row_line.split('\t')
 
             # Process each cell in the row (skipping the ROW_X cell)
-            for x in range(min(self.width, len(cells) - 1)):
+            for x in range(0, self.width):
                 feature_str = cells[x + 1]
                 self.hexes[x][y] = Hex(feature_str)
+                print("Hex at", x, y, ":", self.hexes[x][y])
 
     def __getitem__(self, x):
         """Allow bracket indexing for x coordinate."""
@@ -148,6 +143,27 @@ class GameBoardRepr:
         """String representation of the game board."""
         return f"GameBoard({self.width}x{self.height})"
 
+    def to_dict(self) -> dict:
+        return {
+            "width": self.width,
+            "height": self.height,
+            "hexes": [[
+                {
+                    "elevation": hex.elevation,
+                    "has_water": hex.has_water,
+                    "depth": hex.depth,
+                    "has_woods": hex.has_woods,
+                    "is_heavy_woods": hex.is_heavy_woods,
+                    "has_pavement": hex.has_pavement,
+                    "has_building": hex.has_building,
+                    "has_bridge": hex.has_bridge,
+                    "bridge_elevation": hex.bridge_elevation,
+                    "has_rough": hex.has_rough,
+                    "has_road": hex.has_road
+                }
+                for hex in row
+            ] for row in self.hexes]
+        }
 
 def parse_board_data(file_content: str) -> GameBoardRepr:
     """Parse board data from file content."""
