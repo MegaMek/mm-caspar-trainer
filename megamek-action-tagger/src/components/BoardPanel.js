@@ -2,12 +2,12 @@ import React from 'react';
 import { useGameContext } from './GameContext';
 
 const BoardPanel = () => {
-  const { gameBoard, filteredActions, gameStates, unitActions, currentActionIndex } = useGameContext();
+  const { gameBoard, gameStates, unitActions, currentActionIndex } = useGameContext();
 
   // Get current action and related game state
-  const currentAction = filteredActions[currentActionIndex];
+  const currentAction = unitActions[currentActionIndex];
   const currentGameState = currentAction
-    ? gameStates[unitActions.findIndex(a => a.entity_id === currentAction.entity_id)]
+    ? gameStates[currentActionIndex]
     : null;
 
   const getTerrainColor = (hex) => {
@@ -25,18 +25,32 @@ const BoardPanel = () => {
       baseColor = `rgb(0, ${intensity}, 0)`;
     } else if (hex.has_pavement) {
       // Grey for pavement
-      const elevationFactor = (hex.elevation + 4) / 14; // Normalize -1 to 4 range to 0-1
+      const elevationFactor = (hex.floor + 4) / 14; // Normalize -1 to 4 range to 0-1
       const intensity = Math.floor(180 * elevationFactor + 60);
       baseColor = `rgb( ${intensity}, ${intensity}, ${intensity})`;
     } else {
-      // Brown scale for terrain levels
-      const elevationFactor = (hex.elevation + 4) / 14; // Normalize -4 to 10 range to 0-1
-      const intensity = Math.floor(200 * elevationFactor + 56);
-      baseColor = `rgb(${intensity}, ${Math.floor(intensity * 0.7)}, ${Math.floor(intensity * 0.3)})`;
+      // Brown scale for terrain levels 197, 227, 172
+      const elevationFactor = (hex.floor + 2) / 16; // Normalize -4 to 10 range to 0-1
+      const intensity = Math.floor(300 * elevationFactor);
+      const red = Math.min(256, intensity + 147);
+      const green = Math.min(intensity + 177, 256);
+      const blue = Math.min(intensity + 122, 256);
+      baseColor = `rgb(${red}, ${green}, ${blue})`;
     }
 
     return baseColor;
   };
+
+  const buildings = ['🏢', '🏬', '🏭'];
+
+  const getBuilding = (hex, x , y) => {
+    if (!hex) return null;
+
+    if (hex.has_building) {
+      return buildings[x * y % buildings.length];
+    }
+    return null;
+  }
 
   const getUnitIcon = (unit) => {
     const unitType = unit.type || 'BipedMek';
@@ -100,13 +114,13 @@ const BoardPanel = () => {
     if (!currentAction) return '';
 
     // Cell size
-    const cellSize = 20;
+    const cellSize = 21;
 
     // Calculate center points of cells
-    const startX = currentAction.from_x * cellSize + cellSize;
-    const startY = currentAction.from_y * cellSize + cellSize;
-    const endX = currentAction.to_x * cellSize + cellSize;
-    const endY = currentAction.to_y * cellSize + cellSize;
+    const startX = currentAction.from_x * cellSize + cellSize/2 + 1;
+    const startY = currentAction.from_y * cellSize + cellSize/2 + 1;
+    const endX = currentAction.to_x * cellSize + cellSize/2 + 1;
+    const endY = currentAction.to_y * cellSize + cellSize/2 + 1;
 
     // For long paths, shorten the arrow slightly to avoid overlapping with markers
     const dx = endX - startX;
@@ -132,13 +146,13 @@ const BoardPanel = () => {
   const getArrowHeadPoints = () => {
     if (!currentAction) return '';
 
-    const cellSize = 20;
+    const cellSize = 21;
 
     // Calculate center points
-    const startX = currentAction.from_x * cellSize + cellSize;
-    const startY = currentAction.from_y * cellSize + cellSize;
-    const endX = currentAction.to_x * cellSize + cellSize;
-    const endY = currentAction.to_y * cellSize + cellSize;
+    const startX = currentAction.from_x * cellSize + cellSize/2 + 1;
+    const startY = currentAction.from_y * cellSize + cellSize/2 + 1;
+    const endX = currentAction.to_x * cellSize + cellSize/2 + 1;
+    const endY = currentAction.to_y * cellSize + cellSize/2 + 1;
 
     // Calculate the angle for the arrowhead
     const angle = Math.atan2(endY - startY, endX - startX);
@@ -159,12 +173,11 @@ const BoardPanel = () => {
 
   return (
     <div className="board-panel">
-      <h2 className="section-title">Game Board</h2>
       <div className="board-container">
         <div className="board-wrapper" style={{
           position: 'relative',
-          width: `${gameBoard.height * 20}px`,
-          height: `${gameBoard.width * 20}px`
+          width: `${gameBoard.height * 21}px`,
+          height: `${gameBoard.width * 21}px`
         }}>
         <div
           className="game-board"
@@ -181,7 +194,7 @@ const BoardPanel = () => {
                 style={{
                   backgroundColor: getTerrainColor(hex),
                 }}
-                title={`(${x},${y}) Elevation: ${hex?.elevation ?? 0}`}
+                title={`(${x},${y}) Elevation: ${hex?.floor ?? 0}`}
               >
                 {/* Draw units on the map */}
                 {currentGameState?.some(state => state.x === x && state.y === y) && (
@@ -213,6 +226,14 @@ const BoardPanel = () => {
                 {currentAction && x === currentAction.to_x && y === currentAction.to_y && (
                   <div className="end-position"></div>
                 )}
+                {!currentGameState?.some(state => state.x === x && state.y === y) &&
+                    !((currentAction.to_x === x && currentAction.to_y === y) ||
+                        (currentAction.from_x === x && currentAction.from_y === y)) &&
+                    hex.has_building && (
+                  <div>
+                    {getBuilding(hex, x, y)}
+                  </div>
+                )}
               </div>
             ))
           )}
@@ -232,7 +253,7 @@ const BoardPanel = () => {
             >
               <path
                 d={getArrowPath()}
-                stroke="#ffcc00"
+                stroke="#ff4aff"
                 strokeWidth="2"
                 fill="none"
                 strokeDasharray="5,5"
@@ -240,7 +261,7 @@ const BoardPanel = () => {
               {/* Draw arrowhead manually instead of using markers for better control */}
               <polygon
                 points={getArrowHeadPoints()}
-                fill="#ffcc00"
+                fill="#ff4aff"
               />
             </svg>
           )}

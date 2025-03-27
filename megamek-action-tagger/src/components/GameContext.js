@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { preprocessTags, filteredActions as filterActions, filteredActionsAndGameStates } from './PreprocessTags';
 
 // Create the context
 const GameContext = createContext();
@@ -21,6 +22,7 @@ export const GameProvider = ({ children }) => {
   const [filteredActions, setFilteredActions] = useState([]);
   const [currentActionIndex, setCurrentActionIndex] = useState(0);
   const [tags, setTags] = useState({});
+  const [notes, setNotes] = useState('');
   const [isDataLoaded, setIsDataLoaded] = useState(false);
 
   // Initialize with mock data if no data is loaded
@@ -30,19 +32,35 @@ export const GameProvider = ({ children }) => {
     }
   }, [isDataLoaded]);
 
+  const randomHex = () => {
+    const elevation = Math.floor(Math.random() * 5) - 1;
+    const has_water = Math.random() > 0.95;
+    const depth = has_water ? Math.random() * 3 + 1 : 0
+    const has_woods = has_water ? false : Math.random() > 0.7;
+    const is_heavy_woods = has_woods ? Math.random() > 0.6 : false;
+    const has_pavement = has_water || has_woods ? false : Math.random() > 0.9;
+    const has_building = has_pavement ? Math.random() > 0.5 : false;
+    const building_elevation = has_building ? Math.floor(Math.random() * 5) : 0;
+    const floor = (has_building ? building_elevation : 0) + elevation - depth;
+    return {
+      elevation,
+      has_water,
+      depth,
+      has_woods,
+      is_heavy_woods,
+      has_pavement,
+      has_building,
+      building_elevation,
+      floor
+    }
+  }
+
   const initializeMockData = () => {
     // Create a mock board
     const mockBoard = {
       width: 20,
       height: 20,
-      hexes: Array(20).fill().map(() => Array(20).fill().map(() => ({
-        elevation: Math.floor(Math.random() * 5) - 1,
-        has_water: Math.random() > 0.8,
-        depth: Math.random() > 0.9 ? 2 : 1,
-        has_woods: Math.random() > 0.7,
-        is_heavy_woods: Math.random() > 0.6,
-        has_pavement: Math.random() > 0.9
-      })))
+      hexes: Array(20).fill().map(() => Array(20).fill().map(() => (randomHex())))
     };
     setGameBoard(mockBoard);
 
@@ -85,11 +103,7 @@ export const GameProvider = ({ children }) => {
     setGameStates(mockGameStates);
 
     // Filter actions
-    const filtered = mockActions.filter(action =>
-      action.is_bot !== 1 &&
-      !['AeroSpaceFighter', 'Infantry', 'FixedWingSupport', 'ConvFighter',
-        'Dropship', 'EjectedCrew', 'MekWarrior', 'GunEmplacement', 'BattleArmor'].includes(action.type || 'BipedMek')
-    );
+    const filtered = filterActions(mockActions);
     setFilteredActions(filtered);
     setIsDataLoaded(true);
   };
@@ -104,31 +118,20 @@ export const GameProvider = ({ children }) => {
       if (data.gameBoard) {
         setGameBoard(data.gameBoard);
       }
-
-      // Set unit actions
-      if (data.unitActions) {
-        setUnitActions(data.unitActions);
-
-        // Filter actions
-        const filtered = data.unitActions.filter(action =>
-          action.is_bot !== 1 &&
-          !['AeroSpaceFighter', 'Infantry', 'FixedWingSupport', 'ConvFighter',
-            'Dropship', 'EjectedCrew', 'MekWarrior', 'GunEmplacement', 'BattleArmor'].includes(action.type || 'BipedMek')
-        );
-        setFilteredActions(filtered);
-      }
-
-      // Set game states
-      if (data.gameStates) {
-        setGameStates(data.gameStates);
-      }
-
       // Reset current action index
       setCurrentActionIndex(0);
 
-      // Load tags if available
-      if (data.tags) {
-        setTags(data.tags);
+      if (data.gameStates && data.unitActions) {
+        const filteredData = filteredActionsAndGameStates(data.unitActions, data.gameStates);
+        setUnitActions(filteredData.filteredActions);
+        setGameStates(filteredData.filteredStates);
+
+        // Load tags if available
+        if (data.tags) {
+          setTags(data.tags);
+        } else {
+          setTags(preprocessTags(filteredData.filteredActions, filteredData.filteredStates, data.gameBoard))
+        }
       }
 
       setIsDataLoaded(true);
@@ -145,7 +148,8 @@ export const GameProvider = ({ children }) => {
       gameBoard,
       unitActions,
       gameStates,
-      tags
+      tags,
+      notes
     }, null, 2);
   };
 
@@ -160,6 +164,8 @@ export const GameProvider = ({ children }) => {
     isDataLoaded,
     setCurrentActionIndex,
     setTags,
+    notes,
+    setNotes,
     loadGameData,
     exportAllData
   };

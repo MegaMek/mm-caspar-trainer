@@ -9,8 +9,6 @@ function App() {
   return (
     <div className="App">
       <GameProvider>
-        <h1 className="title">MegaMek Action Tagger</h1>
-        <DataImporter />
         <div className="main-container">
           <BoardPanel />
           <ActionTagger />

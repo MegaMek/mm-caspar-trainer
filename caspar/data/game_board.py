@@ -16,6 +16,7 @@ class Hex:
         self.has_building = False
         self.has_bridge = False
         self.bridge_elevation = 0
+        self.build_elevation = 0
         self.has_rough = False
         self.has_road = False
 
@@ -45,6 +46,9 @@ class Hex:
 
         # Check for buildings
         if "building" in feature_str:
+            building_elevation_match = re.search(r"building\((\d+)", feature_str)
+            if building_elevation_match:
+                self.build_elevation = int(building_elevation_match.group(1))
             self.has_building = True
 
         # Check for bridges
@@ -60,8 +64,7 @@ class Hex:
 
     def __repr__(self) -> str:
         """String representation of the hex for debugging."""
-        features = []
-        features.append(f"elev:{self.elevation}")
+        features = [f"elev:{self.elevation}"]
         if self.has_water:
             features.append(f"water(d:{self.depth})")
         if self.has_woods:
@@ -72,12 +75,12 @@ class Hex:
         if self.has_road:
             features.append("road")
         if self.has_building:
-            features.append("building")
+            features.append(f"building(e:{self.build_elevation})")
         if self.has_bridge:
             features.append(f"bridge(e:{self.bridge_elevation})")
         if self.has_rough:
             features.append("rough")
-        return ", ".join(features)
+        return "Hex " + ", ".join(features)
 
 
 class GameBoardRepr:
@@ -159,7 +162,9 @@ class GameBoardRepr:
                     "has_bridge": hex.has_bridge,
                     "bridge_elevation": hex.bridge_elevation,
                     "has_rough": hex.has_rough,
-                    "has_road": hex.has_road
+                    "has_road": hex.has_road,
+                    "floor": hex.depth + hex.elevation + hex.build_elevation,
+                    "building_elevation": hex.build_elevation,
                 }
                 for hex in row
             ] for row in self.hexes]
