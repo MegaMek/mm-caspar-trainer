@@ -29,6 +29,8 @@ import os
 # Data settings
 RESOURCES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources")
 DATASETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "datasets")
+DATASETS_UNTAGGED_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "datasets_untagged")
+DATASETS_TAGGED_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "datasets_tagged")
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 CHECKPOINT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "checkpoints")
 MEK_FILE = os.path.join(RESOURCES_DIR, "meks.tsv")
@@ -36,20 +38,23 @@ DOTENV_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 
 # Model settings
 MODEL_CONFIG = {
-    "hidden_layers": [354, 708],
-    "dropout_rate": 0.3,
-    "learning_rate": 0.1
+    "hidden_layers": [1036, 1036, 130, 518, 340, 130, 65, 130],
+    "dropout_rate": 0.18344289381176082,
+    "learning_rate": 0.016544355731452045
 }
 
 # Training settings
 TRAINING_CONFIG = {
     "test_size": 0.1,
-    "epochs": 100,
-    "batch_size": 16,
+    "validation_size": 0.1,
+    "epochs": 500,
+    "batch_size": 128,
 }
 
 # MlFlow settings
 MLFLOW_CONFIG = {
     "tracking_uri": os.environ.get("MLFLOW_TRACKING_URI", None),
-    "experiment_name": "00-classifier-ffnn"
+    "experiment_name": "01-classifier-ffnn",
+    "run_name": None,
+    "model_name": "CASPAR",
 }

@@ -23,6 +23,8 @@
 #
 # Catalyst Game Labs and the Catalyst Game Labs logo are trademarks of
 # InMediaRes Productions, LLC.
+
+import json
 import os
 import math
 from typing import Tuple, List, Dict, Union
@@ -31,7 +33,7 @@ import re
 
 import numpy as np
 
-from caspar.config import DATA_DIR, DATASETS_DIR, MEK_FILE
+from caspar.config import DATA_DIR, DATASETS_DIR, MEK_FILE, DATASETS_TAGGED_DIR
 from caspar.data.game_board import GameBoardRepr
 
 import logging
@@ -266,14 +268,24 @@ class DataLoader:
             'team_id': to_int(data[21]) if len(data) > 21 else 0,
             'chance_of_failure': to_float(data[22].replace(',', '.')) if len(data) > 22 else 0.0,
             'is_bot': to_int(data[23]) if len(data) > 23 else 0,
-            'armor': mek.get("armor", -1),
-            'internal': mek.get("internal", -1),
-            'max_range': mek.get("max_range", -1),
-            'total_damage': mek.get("total_damage", -1),
-            'ecm': mek.get("ecm", 0),
-            'type': mek.get('type', None),
-            'role': mek.get('role', None),
-            'bv':  mek.get('bv', -1)
+            'armor': to_int(data[24]) if len(data) > 24 else mek.get("armor", -1),
+            'internal': to_int(data[25]) if len(data) > 25 else mek.get("internal", -1),
+            'max_range': to_int(data[26]) if len(data) > 26 else mek.get("max_range", -1),
+            'total_damage': to_int(data[27]) if len(data) > 27 else mek.get("total_damage", -1),
+            'ecm': to_int(data[28]) if len(data) > 28 else mek.get("ecm", 0),
+            'type': to_int(data[29]) if len(data) > 29 else mek.get('type', "BipedMek"),
+            'role': to_int(data[30]) if len(data) > 30 else mek.get('role', None),
+            'bv':  to_int(data[31]) if len(data) > 31 else mek.get('bv', -1),
+            'armor_front': to_int(data[32]) if len(data) > 32 else mek.get('armor_front', mek.get("armor", -1)),
+            'armor_right': to_int(data[33]) if len(data) > 33 else mek.get('armor_right', mek.get("armor", -1)),
+            'armor_left': to_int(data[34]) if len(data) > 34 else mek.get('armor_left', mek.get("armor", -1)),
+            'armor_back': to_int(data[35]) if len(data) > 35 else mek.get('armor_back', mek.get("armor", -1)),
+            'arc_0': to_int(data[36]) if len(data) > 36 else mek.get('arc_0', mek.get("total_damage", -1)),
+            'arc_1': to_int(data[37]) if len(data) > 37 else mek.get('arc_1', mek.get("total_damage", -1) / 3 * 2),
+            'arc_2': to_int(data[38]) if len(data) > 38 else mek.get('arc_2', mek.get("total_damage", -1) / 6),
+            'arc_3': to_int(data[39]) if len(data) > 39 else mek.get('arc_3', mek.get("total_damage", -1) / 10),
+            'arc_4': to_int(data[40]) if len(data) > 40 else mek.get('arc_4', mek.get("total_damage", -1) / 6),
+            'arc_5': to_int(data[41]) if len(data) > 41 else mek.get('arc_5', mek.get("total_damage", -1) / 3 * 2)
         }
 
 
@@ -335,7 +347,7 @@ class DelayedUnitStateBuilder:
             'x': to_int(data[8]),
             'y': to_int(data[9]),
             'facing': to_int(data[10]),
-            'mp': to_float(data[11]),
+            'mp': to_int(data[11]),
             'heat': to_float(data[12]),
             'heat_p': to_float(data[12]) / (40 if "Mek" in data[6] else 999),
             'prone': to_int(data[13]),
@@ -380,6 +392,35 @@ def load_datasets():
                 print(f"Failed to load {file_path}: {str(e)}")
 
     return unit_actions, game_states, game_boards
+
+
+
+def load_tagged_datasets_classifier():
+    game_states = []
+    unit_actions = []
+    game_boards = []
+    tags = []
+    i = 0
+    for root, _, files in os.walk(DATASETS_TAGGED_DIR):
+        for file in files:
+            file_path = os.path.join(root, file)
+            try:
+                with (open(file_path, "r") as f):
+                    value = json.load(f)
+
+                unit_actions.append((i, value["unitActions"]))
+                game_states.append((i, value["gameStates"]))
+                game_boards.append((i, value["gameBoard"]))
+                tags.append((i, value["tags"]))
+                print(f"Loaded {i} - Loaded file: {file_path}")
+                i += 1
+            except Exception as e:
+                logger.error("Error when reading thing", e)
+                print(f"Failed to load {file_path}: {str(e)}")
+
+    return unit_actions, game_states, game_boards, tags
+
+
 
 
 def load_data_as_numpy_arrays():

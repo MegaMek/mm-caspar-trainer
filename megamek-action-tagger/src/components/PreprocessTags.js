@@ -1,120 +1,212 @@
-// Utility function for preprocessing tags - isolated from component logic
-// This function analyzes unit actions, game states, and the game board
-// to automatically suggest appropriate movement classifications
+/* Copyright (C) 2025-2025 The MegaMek Team. All Rights Reserved.
+*
+* This file is part of MM-Caspar-Trainer.
+*
+* MM-Caspar-Trainer is free software: you can redistribute it and/or modify
+* it under the terms of the GNU General Public License (GPL),
+* version 3 or (at your option) any later version,
+* as published by the Free Software Foundation.
+*
+* MM-Caspar-Trainer is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty
+* of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+* See the GNU General Public License for more details.
+*
+* A copy of the GPL should have been included with this project;
+* if not, see <https://www.gnu.org/licenses/>.
+*
+* NOTICE: The MegaMek organization is a non-profit group of volunteers
+* creating free software for the BattleTech community.
+*
+* MechWarrior, BattleMech, `Mech and AeroTech are registered trademarks
+* of The Topps Company, Inc. All Rights Reserved.
+*
+* Catalyst Game Labs and the Catalyst Game Labs logo are trademarks of
+* InMediaRes Productions, LLC.
+*/
 
-const preprocessTags = (unitActions, gameStates, gameBoard) => {
-  // Initialize empty tags object
+/**
+ * Checks if a unit is stationary
+ * @param {Object} action - The unit action
+ * @param {Object} _closestEnemy - Unused in this function
+ * @returns {boolean} - True if unit didn't move
+ */
+const isStationary = (action, _closestEnemy) => {
+  return action.hexes_moved === 0 ||
+         (action.from_x === action.to_x && action.from_y === action.to_y);
+};
+
+/**
+ * Checks if movement is offensive
+ * @param {Object} action - The unit action
+ * @param {Object} closestEnemy - Closest enemy data
+ * @returns {boolean} - True if offensive movement
+ */
+const isOffensive = (action, closestEnemy) => {
+  return action.hexes_moved > 2 && closestEnemy > 0;
+};
+
+/**
+ * Checks if movement is defensive
+ * @param {Object} action - The unit action
+ * @param {Object} closestEnemy - Closest enemy data
+ * @returns {boolean} - True if defensive movement
+ */
+const isDefensive = (action, closestEnemy) => {
+  return action.hexes_moved > 2 && closestEnemy < 0;
+};
+
+/**
+ * Checks if movement is a reposition
+ * @param {Object} action - The unit action
+ * @param {Object} _closestEnemy - Unused in this function
+ * @returns {boolean} - True if reposition movement
+ */
+const isReposition = (action, _closestEnemy) => {
+  return action.hexes_moved < 3;
+};
+
+/**
+ * Priority order for checking behaviors
+ */
+const BEHAVIOR_PRIORITY = [
+  "HOLD_POSITION",
+  "REPOSITION",
+  "OFFENSIVE",
+  "DEFENSIVE",
+];
+
+/**
+ * Definition of movement behaviors with their check functions
+ */
+const BEHAVIORS = {
+  "HOLD_POSITION": isStationary,
+  "OFFENSIVE": isOffensive,
+  "DEFENSIVE": isDefensive,
+  "REPOSITION": isReposition,
+};
+
+/**
+ * Main function to classify movement using behavior configuration
+ * @param {Object} action - The unit action
+ * @param {Array} enemyDistancesData - Array of enemy distance data
+ * @returns {string} - Movement classification
+ */
+const classifyMovement = (action, distanceDelta) => {
+  // Default classification
+  let behaviorType = "DEFENSIVE";
+  // Check behaviors in priority order
+  for (const behavior of BEHAVIOR_PRIORITY) {
+    const checkFunction = BEHAVIORS[behavior];
+
+    if (checkFunction && checkFunction(action, distanceDelta)) {
+      behaviorType = behavior;
+      break;
+    }
+  }
+
+  return behaviorType;
+};
+
+/**
+ * Extract enemy positions from game states
+ * @param {Array} gameStates - Game state data
+ * @param {number} friendlyTeamId - ID of friendly team
+ * @returns {Array} - Array of enemy positions
+ */
+const extractEnemyPositions = (gameStates, friendlyTeamId) => {
+  const enemyPositions = [];
+
+  gameStates.forEach(stateGroup => {
+    if (Array.isArray(stateGroup)) {
+      stateGroup.forEach(state => {
+        if (state.team_id !== friendlyTeamId) {
+          enemyPositions.push(state);
+        }
+      });
+    }
+  });
+
+  return enemyPositions;
+};
+
+/**
+ * Calculate distance between two points
+ * @param {number} x1 - First point x
+ * @param {number} y1 - First point y
+ * @param {number} x2 - Second point x
+ * @param {number} y2 - Second point y
+ * @returns {number} - Euclidean distance
+ */
+const calculateDistance = (x1, y1, x2, y2) => {
+  return Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+};
+
+/**
+ * Assess move quality
+ * @param {Object} action - The unit action
+ * @returns {string} - Quality assessment
+ */
+const assessMoveQuality = (action) => {
+  if (action.from_x === -1 && action.from_y === -1) {
+    return "IGNORE";
+  } else if (action.mp_used > action.max_mp * 0.75) {
+    return "HIGH_QUALITY";
+  }
+  return "LOW_QUALITY";
+};
+
+/**
+ * Create a tag object
+ * @param {Object} action - The unit action
+ * @param {string} classification - Movement classification
+ * @param {string} quality - Quality assessment
+ * @returns {Object} - Tag object
+ */
+const createTag = (action, classification, quality) => {
+  return {
+    entity: action.entity_id,
+    round: action.round || 0,
+    classification,
+    quality
+  };
+};
+
+/**
+ * Main function to preprocess tags
+ * @param {Array} unitActions - Unit actions
+ * @param {Array} gameStates - Game states
+ * @param {Object} _gameBoard - Game board (unused)
+ * @returns {Object} - Tags object
+ */
+const preprocessTags = (unitActions, gameStates, _gameBoard) => {
   const tags = {};
 
-  // Process each filtered action
   unitActions.forEach((action, index) => {
-    // Default classification is ADVANCE
-    let classification = "ADVANCE";
-    let quality = "LOW_QUALITY";
-
-    // Find all enemy positions from game states
     const friendlyTeamId = action.team_id;
-    const enemyPositions = [];
+    const enemyPositions = extractEnemyPositions(gameStates, friendlyTeamId);
+    const closestEnemyStart = distanceFrom(action.from_x, action.from_y, enemyPositions);
+    const closestEnemyEnd = distanceFrom(action.to_x, action.to_y, enemyPositions);
+    const distanceDelta = closestEnemyStart - closestEnemyEnd
+    const classification = classifyMovement(action, distanceDelta);
+    const quality = assessMoveQuality(action);
 
-    // Collect all enemy positions from all game states
-    gameStates.forEach(stateGroup => {
-      if (Array.isArray(stateGroup)) {
-        stateGroup.forEach(state => {
-          if (state.team_id !== friendlyTeamId) {
-            enemyPositions.push(state);
-          }
-        });
-      }
-    });
-
-    // If no movement, it's a HOLD_POSITION
-    if (action.hexes_moved === 0 || (action.from_x === action.to_x && action.from_y === action.to_y)) {
-      classification = "HOLD_POSITION";
-    }
-    // For all movements, analyze the positioning relative to enemies
-    else {
-      // Calculate the unit's weapon range (simplified; would be better to use actual weapon data)
-      const unitMaxRange = action.max_range || 12; // Default to medium range if no data
-
-      // Calculate distances to enemies before and after the move
-      const enemyDistancesData = enemyPositions.map(enemy => {
-        const distBefore = Math.sqrt(Math.pow(enemy.x - action.from_x, 2) + Math.pow(enemy.y - action.from_y, 2));
-        const distAfter = Math.sqrt(Math.pow(enemy.x - action.to_x, 2) + Math.pow(enemy.y - action.to_y, 2));
-        return {
-          distBefore,
-          distAfter,
-          distChange: distBefore - distAfter, // Positive means moving toward enemy
-          wasInRange: distBefore <= unitMaxRange,
-          isInRange: distAfter <= unitMaxRange,
-          isThreatening: distAfter <= enemy.max_range,
-          wasThreatening: distBefore <= enemy.max_range
-        };
-      });
-
-      // Sort by closest enemy after the move
-      enemyDistancesData.sort((a, b) => a.distAfter - b.distAfter);
-
-      // Check if there are any enemies in analysis
-      if (enemyDistancesData.length > 0) {
-        const closestEnemy = enemyDistancesData[0];
-        const averageDistChange = enemyDistancesData.reduce((sum, data) => sum + data.distChange, 0) / enemyDistancesData.length;
-
-        // OFFENSIVE: Moving toward enemy and putting them in attack range
-        if (closestEnemy.distChange > 0 && closestEnemy.isInRange) {
-          classification = "OFFENSIVE";
-        }
-        // DEFENSIVE: Moving away from enemy but keeping them in attack range
-        else if (closestEnemy.distChange < 0 && (closestEnemy.isThreatening && closestEnemy.isInRange)) {
-          classification = "DEFENSIVE";
-        }
-        // RETREAT: Moving away from enemies and leaving attack range
-        else if (averageDistChange < 0 && !closestEnemy.isThreatening && !closestEnemy.isInRange) {
-          classification = "RETREAT";
-        }
-        // ADVANCE: Moving toward enemies but not yet in attack range
-        else if (averageDistChange > 0 && !closestEnemy.isInRange && !closestEnemy.isThreatening) {
-          classification = "ADVANCE";
-        // REPOSITION: Short movements that don't change engagement status significantly
-        }
-
-        if (Math.abs(averageDistChange) < 3 && action.hexes_moved < 4) {
-          classification = "REPOSITION";
-        }
-      } else {
-        // If no enemies detected, classify based on movement distance
-        if (action.hexes_moved >= 4) {
-          classification = "ADVANCE";
-        } else {
-          classification = "REPOSITION";
-        }
-      }
-
-      // Handle jumps (often tactical repositioning)
-      if (action.jumping === 1) {
-        // Jumping is usually a reposition unless it's clearly offensive or retreating
-        if (classification !== "OFFENSIVE" && classification !== "RETREAT") {
-          classification = "REPOSITION";
-        }
-      }
-    }
-
-    // Assess move quality based on MP efficiency and terrain choice
-    if (action.mp_used > action.max_mp * 0.75) {
-      // Using most movement points is usually good
-      quality = "HIGH_QUALITY";
-    }
-
-    // Add to tags object
-    tags[index] = {
-      entity: action.entity_id,
-      round: action.round || 0,
-      classification,
-      quality
-    };
+    tags[index] = createTag(action, classification, quality);
   });
 
   return tags;
 };
+
+const distanceFrom = (x, y, units) => {
+  let minDist = 9999999999;
+  for (let unit of units) {
+    let dist = calculateDistance(unit.x, unit.y, x, y);
+    minDist = Math.min(dist, minDist)
+  }
+
+  return minDist;
+}
+
 
 const FILTER_TYPES = ['AeroSpaceFighter', 'Infantry', 'FixedWingSupport', 'ConvFighter',
       'Dropship', 'EjectedCrew', 'MekWarrior', 'GunEmplacement', 'BattleArmor'];

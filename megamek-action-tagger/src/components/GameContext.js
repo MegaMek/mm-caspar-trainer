@@ -1,3 +1,30 @@
+/* Copyright (C) 2025-2025 The MegaMek Team. All Rights Reserved.
+*
+* This file is part of MM-Caspar-Trainer.
+*
+* MM-Caspar-Trainer is free software: you can redistribute it and/or modify
+* it under the terms of the GNU General Public License (GPL),
+* version 3 or (at your option) any later version,
+* as published by the Free Software Foundation.
+*
+* MM-Caspar-Trainer is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty
+* of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+* See the GNU General Public License for more details.
+*
+* A copy of the GPL should have been included with this project;
+* if not, see <https://www.gnu.org/licenses/>.
+*
+* NOTICE: The MegaMek organization is a non-profit group of volunteers
+* creating free software for the BattleTech community.
+*
+* MechWarrior, BattleMech, `Mech and AeroTech are registered trademarks
+* of The Topps Company, Inc. All Rights Reserved.
+*
+* Catalyst Game Labs and the Catalyst Game Labs logo are trademarks of
+* InMediaRes Productions, LLC.
+*/
+
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { preprocessTags, filteredActions as filterActions, filteredActionsAndGameStates } from './PreprocessTags';
 
@@ -19,6 +46,7 @@ export const GameProvider = ({ children }) => {
   const [gameBoard, setGameBoard] = useState({ width: 20, height: 20, hexes: [] });
   const [unitActions, setUnitActions] = useState([]);
   const [gameStates, setGameStates] = useState([]);
+  const [qualityIndex, setQualityIndex] = useState([]);
   const [filteredActions, setFilteredActions] = useState([]);
   const [currentActionIndex, setCurrentActionIndex] = useState(0);
   const [tags, setTags] = useState({});
@@ -125,7 +153,7 @@ export const GameProvider = ({ children }) => {
         const filteredData = filteredActionsAndGameStates(data.unitActions, data.gameStates);
         setUnitActions(filteredData.filteredActions);
         setGameStates(filteredData.filteredStates);
-
+        setQualityIndex(calculateQualityIndex(filteredData.filteredActions, filteredData.filteredStates));
         // Load tags if available
         if (data.tags) {
           setTags(data.tags);
@@ -141,6 +169,50 @@ export const GameProvider = ({ children }) => {
       return false;
     }
   };
+const calculateQualityIndex = (unitActions, gameStates) => {
+  // Find which players are humans (we know these for certain)
+  const humanPlayers = new Set(
+    unitActions
+      .filter(action => action.is_bot === 0)
+      .map(action => action.player_id)
+  );
+
+  // Extract unique units from nested gameStates (array of arrays)
+  const uniqueUnits = gameStates.reduce((allUnits, gameStatesArray) => {
+    return gameStatesArray.reduce((units, gameState) => {
+      const unitKey = `${gameState.entity_id}`;
+      if (!units[unitKey]) {
+        units[unitKey] = {
+          isBot: !humanPlayers.has(gameState.player_id),
+          bv: gameState.bv || 0
+        };
+      }
+      return units;
+    }, allUnits);
+  }, {});
+
+  // Sum BV for human and bot players
+  const { humanBV, botBV } = Object.values(uniqueUnits).reduce(
+    (totals, unit) => {
+      if (unit.isBot) {
+        totals.botBV += unit.bv;
+      } else {
+        totals.humanBV += unit.bv;
+      }
+      return totals;
+    },
+    { humanBV: 0, botBV: 0 }
+  );
+
+  // Calculate quality index
+  const adjustedBotBV = botBV * 2;
+
+  // Avoid division by zero
+  if (adjustedBotBV === 0) return 1;
+
+  // Calculate ratio, cap between 0-100
+  return Math.floor((humanBV / adjustedBotBV) * 100);
+};
 
   // Export all data to JSON
   const exportAllData = () => {
@@ -166,6 +238,7 @@ export const GameProvider = ({ children }) => {
     setTags,
     notes,
     setNotes,
+    qualityIndex,
     loadGameData,
     exportAllData
   };

@@ -7,7 +7,8 @@ datasets/**/*.tsv
 .venv/
 resources/.meks.tsv
 *.tsv
-
+*.png
+*.npy
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

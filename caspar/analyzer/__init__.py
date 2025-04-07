@@ -23,5 +23,3 @@
 #
 # Catalyst Game Labs and the Catalyst Game Labs logo are trademarks of
 # InMediaRes Productions, LLC.
-#
-# Chassis	Model	BV	TotalArmor	TotalInternal	ECM	maxRange	totalDamage	unitRole

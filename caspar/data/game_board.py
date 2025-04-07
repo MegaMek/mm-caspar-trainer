@@ -1,11 +1,37 @@
+# Copyright (C) 2025-2025 The MegaMek Team. All Rights Reserved.
+#
+# This file is part of MM-Caspar-Trainer.
+#
+# MM-Caspar-Trainer is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License (GPL),
+# version 3 or (at your option) any later version,
+# as published by the Free Software Foundation.
+#
+# MM-Caspar-Trainer is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty
+# of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+# See the GNU General Public License for more details.
+#
+# A copy of the GPL should have been included with this project;
+# if not, see <https://www.gnu.org/licenses/>.
+#
+# NOTICE: The MegaMek organization is a non-profit group of volunteers
+# creating free software for the BattleTech community.
+#
+# MechWarrior, BattleMech, `Mech and AeroTech are registered trademarks
+# of The Topps Company, Inc. All Rights Reserved.
+#
+# Catalyst Game Labs and the Catalyst Game Labs logo are trademarks of
+# InMediaRes Productions, LLC.
+
 import re
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Optional
 
 
 class Hex:
     """Represents a single hex on the game board with all its terrain features."""
 
-    def __init__(self, feature_str: str):
+    def __init__(self, feature_str_in: str):
         """Initialize a hex from a feature string."""
         self.elevation = 0
         self.has_water = False
@@ -14,28 +40,41 @@ class Hex:
         self.is_heavy_woods = False
         self.has_pavement = False
         self.has_building = False
+        self.has_swamp = False
+        self.has_magma = False
         self.has_bridge = False
         self.bridge_elevation = 0
         self.build_elevation = 0
         self.has_rough = False
         self.has_road = False
+        self.has_rubble = False
+        self.has_mud = False
+        self.has_ice = False
+        self.has_rapids = False
+        self.has_geyser = False
+        self.has_fire = False
+        self.has_smoke = False
+        self.has_ultra_sublevel = False
+        self.has_hazardous_liquid = False
+        self.has_fuel_tank = False
 
+        feature_str = feature_str_in.lower()
         # Extract level information
-        level_match = re.match(r"Level: (-?\d+)", feature_str)
+        level_match = re.match(r"level: (-?\d+)", feature_str)
         if level_match:
             self.elevation = int(level_match.group(1))
 
         # Check for water
-        if "Water" in feature_str:
+        if "water" in feature_str:
             self.has_water = True
-            depth_match = re.search(r"Water, depth: (\d+)", feature_str)
+            depth_match = re.search(r"water, depth: (\d+)", feature_str)
             if depth_match:
                 self.depth = int(depth_match.group(1))
 
         # Check for woods
-        if "Woods" in feature_str:
+        if "woods" in feature_str:
             self.has_woods = True
-            self.is_heavy_woods = "Heavy Woods" in feature_str
+            self.is_heavy_woods = "heavy woods" in feature_str
 
         # Check for roads and pavements
         if "pavement" in feature_str:
@@ -58,9 +97,44 @@ class Hex:
             if bridge_elev_match:
                 self.bridge_elevation = int(bridge_elev_match.group(1))
 
-        # Check for rough terrain
-        if "Rough" in feature_str:
+        if "rough" in feature_str:
             self.has_rough = True
+
+        if "swamp" in feature_str:
+            self.has_swamp = True
+
+        if "magma" in feature_str:
+            self.has_magma = True
+
+        if "rubble" in feature_str:
+            self.has_rubble = True
+
+        if "mud" in feature_str:
+            self.has_mud = True
+
+        if "ice" in feature_str:
+            self.has_ice = True
+
+        if "rapids" in feature_str:
+            self.has_rapids = True
+
+        if "geyser" in feature_str:
+            self.has_geyser = True
+
+        if "fire" in feature_str:
+            self.has_fire = True
+
+        if "smoke" in feature_str:
+            self.has_smoke = True
+
+        if "ultra_sublevel" in feature_str:
+            self.has_ultra_sublevel = True
+
+        if "hazardous_liquid" in feature_str:
+            self.has_hazardous_liquid = True
+
+        if "fuel_tank" in feature_str:
+            self.has_fuel_tank = True
 
     def __repr__(self) -> str:
         """String representation of the hex for debugging."""
@@ -104,8 +178,8 @@ class GameBoardRepr:
                 dim_line = lines[i + 1]
                 parts = dim_line.split('\t')
                 if len(parts) >= 3:
-                    self.width = int(parts[2]) # I inverted them both :facepalm:
-                    self.height = int(parts[1]) # I inverted them both :facepalm:
+                    self.width = int(parts[2]) # I inverted them both in the logger :facepalm:
+                    self.height = int(parts[1]) # I inverted them both in the logger :facepalm:
                 break
 
         # Initialize empty board
@@ -128,7 +202,6 @@ class GameBoardRepr:
             for x in range(0, self.width):
                 feature_str = cells[x + 1]
                 self.hexes[x][y] = Hex(feature_str)
-                print("Hex at", x, y, ":", self.hexes[x][y])
 
     def __getitem__(self, x):
         """Allow bracket indexing for x coordinate."""
@@ -163,7 +236,7 @@ class GameBoardRepr:
                     "bridge_elevation": hex.bridge_elevation,
                     "has_rough": hex.has_rough,
                     "has_road": hex.has_road,
-                    "floor": hex.depth + hex.elevation + hex.build_elevation,
+                    "floor": hex.elevation + hex.build_elevation - hex.depth,
                     "building_elevation": hex.build_elevation,
                 }
                 for hex in row

@@ -10,3 +10,5 @@ tqdm
 optuna
 optuna-integration[tfkeras]
 psutil
+matplotlib
+seaborn

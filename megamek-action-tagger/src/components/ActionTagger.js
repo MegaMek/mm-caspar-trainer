@@ -1,9 +1,35 @@
+/* Copyright (C) 2025-2025 The MegaMek Team. All Rights Reserved.
+*
+* This file is part of MM-Caspar-Trainer.
+*
+* MM-Caspar-Trainer is free software: you can redistribute it and/or modify
+* it under the terms of the GNU General Public License (GPL),
+* version 3 or (at your option) any later version,
+* as published by the Free Software Foundation.
+*
+* MM-Caspar-Trainer is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty
+* of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+* See the GNU General Public License for more details.
+*
+* A copy of the GPL should have been included with this project;
+* if not, see <https://www.gnu.org/licenses/>.
+*
+* NOTICE: The MegaMek organization is a non-profit group of volunteers
+* creating free software for the BattleTech community.
+*
+* MechWarrior, BattleMech, `Mech and AeroTech are registered trademarks
+* of The Topps Company, Inc. All Rights Reserved.
+*
+* Catalyst Game Labs and the Catalyst Game Labs logo are trademarks of
+* InMediaRes Productions, LLC.
+*/
 import React, { useState, useEffect, useCallback } from 'react';
 import { useGameContext } from './GameContext';
 import './ActionTagger.css';
 
 // Movement Classification Types
-const MOVEMENT_CLASSES = ["OFFENSIVE", "DEFENSIVE", "REPOSITION", "ADVANCE", "HOLD_POSITION", "RETREAT"];
+const MOVEMENT_CLASSES = ["OFFENSIVE", "DEFENSIVE", "HOLD_POSITION"];
 
 // Quality ratings
 const QUALITY_RATINGS = ["HIGH_QUALITY", "LOW_QUALITY", "IGNORE"];
@@ -18,6 +44,7 @@ const ActionTagger = () => {
     notes,
     setNotes,
     exportAllData,
+    qualityIndex,
     loadGameData
   } = useGameContext();
 
@@ -72,19 +99,27 @@ const ActionTagger = () => {
     }
   }, [currentActionIndex, unitActions, selectedClass, selectedQuality, setCurrentActionIndex, setTags, tags]);
 
-  const exportTags = useCallback(() => {
-    const tagsJson = JSON.stringify({tags, notes}, null, 2);
-    const blob = new Blob([tagsJson], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
+  const getDatasetName = () => {
+    // Get current timestamp in YYYYMMDD_HHMMSS format
+    const now = new Date();
+    const timestamp = now.toISOString()
+      .replace(/[-:T.Z]/g, m => m === 'T' ? '_' : '')
+      .substring(0, 15);
 
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'action_tags.json';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, [tags, notes]);
+    // Count number of tags
+    const tagCount = Object.keys(tags).length.toString().padStart(3, '0');
+
+    // Generate random quality index between 0-100, padded to 3 digits
+    const quality = qualityIndex.toString().padStart(3, '0');
+
+    // Create simple hash from unitActions and tags
+    const dataToHash = JSON.stringify({unitActions, tags});
+    const simpleHash = Array.from(dataToHash)
+      .reduce((hash, char) => ((hash << 5) - hash) + char.charCodeAt(0), 0)
+      .toString(16).substring(0, 8);
+
+    return `mm_tagged_dataset_${timestamp}_${tagCount}_${quality}_${simpleHash}.json`;
+  }
 
   const handleExportData = useCallback((e) => {
     if (e) {
@@ -97,7 +132,8 @@ const ActionTagger = () => {
 
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'megamek_data.json';
+    a.download = getDatasetName();
+
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -205,19 +241,18 @@ const ActionTagger = () => {
 
   return (
     <div className="controls-panel">
-      <h2 className="section-title">Action Classification</h2>
+      <h2 className="section-title">Action Classification ({qualityIndex})</h2>
 
       {currentAction ? (
         <div className="action-form">
           <div className="action-info-container">
             <div className="action-info-left">
-              <h3>Current Action:</h3>
-              <p><span className="label">Unit:</span> {currentAction.chassis} {currentAction.model}</p>
-              <p><span className="label">Move:</span> ({currentAction.from_x},{currentAction.from_y}) → ({currentAction.to_x},{currentAction.to_y})</p>
-              <p><span className="label">Hexes Moved:</span> {currentAction.hexes_moved}</p>
-              <p><span className="label">Jumping:</span> {currentAction.jumping ? 'Yes' : 'No'}</p>
-              <p><span className="label">Type:</span> {currentAction.type || 'BipedMek'}</p>
-              <p><span className="label">Team:</span> {currentAction.team_id}</p>
+              <h3>Current Action: <span className="label">Team</span> {currentAction.team_id}</h3>
+              <p><span className="label">Unit:</span>({currentAction.entity_id}) {currentAction.chassis} {currentAction.model} ({currentAction.role})</p>
+              <p><span className="label">Type:</span> {currentAction.type || 'BipedMek'} <span className="label">BV:</span> {currentAction.bv}</p>
+              <p><span className="label">Health:</span> {currentAction.armor} / {currentAction.internal} ({((currentAction.armor_p + currentAction.internal_p)/ 2 * 100).toFixed(1)}%) </p>
+              <p><span className="label">Move:</span> ({currentAction.from_x+1},{currentAction.from_y+1}) → ({currentAction.to_x+1},{currentAction.to_y+1})</p>
+              <p><span className="label">Hexes Moved:</span> {currentAction.hexes_moved} <span className="label">Jumping:</span> {currentAction.jumping ? 'Yes' : 'No'} <span className="label">Range:</span> {currentAction.max_range}</p>
             </div>
             <div className="action-info-right">
               <h3>Notes:</h3>

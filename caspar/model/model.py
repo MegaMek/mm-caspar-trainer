@@ -70,7 +70,7 @@ class CasparModel:
                         input_shape=(self.input_shape,),
                         activation='sigmoid',
                         name='hidden_layer_0'))
-        model.add(BatchNormalization(name='batch_norm_0'))
+        # model.add(BatchNormalization(name='batch_norm_0'))
         model.add(Dropout(self.dropout_rate, name='dropout_0'))
 
         # Hidden layers
@@ -79,7 +79,7 @@ class CasparModel:
             model.add(Dense(units,
                             activation='sigmoid',
                             name='hidden_layer_' + str(layer_num)))
-            model.add(BatchNormalization(name='batch_norm_' + str(layer_num)))
+            # model.add(BatchNormalization(name='batch_norm_' + str(layer_num)))
             model.add(Dropout(self.dropout_rate, name='dropout_' + str(layer_num)))
 
         # Output layer - single neuron
@@ -152,6 +152,9 @@ class CasparClassificationModel(CasparModel):
         # Call parent constructor
         super().__init__(input_shape, hidden_layers, dropout_rate, l2_reg)
 
+    def set_model(self, model):
+        self.model = model
+
     def build_model(self):
         """
         Build the neural network classification model architecture.
@@ -164,7 +167,7 @@ class CasparClassificationModel(CasparModel):
         # Input layer
         model.add(Dense(self.hidden_layers[0],
                         input_shape=(self.input_shape,),
-                        activation='relu',
+                        activation='sigmoid',
                         name='hidden_layer_0'))
         model.add(BatchNormalization(name='batch_norm_0'))
         model.add(Dropout(self.dropout_rate, name='dropout_0'))
@@ -172,7 +175,7 @@ class CasparClassificationModel(CasparModel):
         # Hidden layers
         for i, units in enumerate(self.hidden_layers[1:], 1):
             model.add(Dense(units,
-                            activation='relu',
+                            activation='sigmoid',
                             name=f'hidden_layer_{i}'))
             model.add(BatchNormalization(name=f'batch_norm_{i}'))
             model.add(Dropout(self.dropout_rate, name=f'dropout_{i}'))

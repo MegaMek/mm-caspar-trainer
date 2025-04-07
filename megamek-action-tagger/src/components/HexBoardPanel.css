@@ -1,0 +1,102 @@
+/* Copyright (C) 2025-2025 The MegaMek Team. All Rights Reserved.
+*
+* This file is part of MM-Caspar-Trainer.
+*
+* MM-Caspar-Trainer is free software: you can redistribute it and/or modify
+* it under the terms of the GNU General Public License (GPL),
+* version 3 or (at your option) any later version,
+* as published by the Free Software Foundation.
+*
+* MM-Caspar-Trainer is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty
+* of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+* See the GNU General Public License for more details.
+*
+* A copy of the GPL should have been included with this project;
+* if not, see <https://www.gnu.org/licenses/>.
+*
+* NOTICE: The MegaMek organization is a non-profit group of volunteers
+* creating free software for the BattleTech community.
+*
+* MechWarrior, BattleMech, `Mech and AeroTech are registered trademarks
+* of The Topps Company, Inc. All Rights Reserved.
+*
+* Catalyst Game Labs and the Catalyst Game Labs logo are trademarks of
+* InMediaRes Productions, LLC.
+*/
+
+/* Make board panel take 4/5 of the width */
+.board-panel {
+  flex: 4;
+  overflow: auto; /* Enable scrolling */
+  padding: 10px;
+  box-sizing: border-box;
+  border-radius: 5px;
+}
+
+/* The container to enable proper scrolling */
+.board-container {
+  width: 100%;
+  height: 100vh;
+  overflow: auto; /* Enable scrolling */
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+/* The wrapper maintains the relative positioning */
+.board-wrapper {
+  min-width: 100%;
+  min-height: 100%;
+}
+
+/* Game board styles */
+.game-board {
+  display: block;
+  min-width: 100%;
+}
+
+/* Add some spacing to ensure the board doesn't touch the edge */
+.board-container::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.board-container::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+.board-container::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+.board-container::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* Custom styles for the unit auras - to be used with the foreignObject elements */
+.unit-friendly {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px #2244ff, 0 0 4px 1px #2244ff;
+}
+
+.unit-enemy {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px #aa0123, 0 0 4px 1px #aa0123;
+}
+
+/* Make sure text is centered within units */
+.unit-friendly span, .unit-enemy span {
+  display: block;
+  text-align: center;
+}

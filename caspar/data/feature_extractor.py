@@ -23,13 +23,19 @@
 #
 # Catalyst Game Labs and the Catalyst Game Labs logo are trademarks of
 # InMediaRes Productions, LLC.
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Union
+import csv
+import os
 
 import numpy as np
 import math
 from tqdm import tqdm
+import matplotlib.pyplot as plt
+import pandas as pd
 
 from caspar.data.game_board import GameBoardRepr
+from caspar.analyzer.feature_analyzer import FeatureAnalyzer
+from caspar.config import DATA_DIR
 
 
 def clamp01(value: float) -> float:
@@ -58,42 +64,85 @@ class FeatureExtractor:
         # Define feature names and their indices for clarity
         _features = [
             "mp_percentage", "heat_percentage", "armor_percentage", "internal_percentage", "jumping",
-            "distance_traveled", "hexes_moved", "is_facing_enemy", "enemy_in_range", "cover_value",
-            "allies_nearby", "enemies_nearby", "team_cohesion", "unit_health_average", "unit_health_front",
-            "unit_health_right", "unit_health_left", "unit_health_back", "position_crowding", "damage_ratio",
+            "distance_traveled", "hexes_moved", "is_facing_enemy", "enemy_in_range", # "cover_value",
+            "allies_nearby",
+            "enemies_nearby",
+            # "team_cohesion",
+            "unit_health_average", "unit_health_front",
+            "unit_health_right", "unit_health_left", "unit_health_back",
+            # "position_crowding",
+            "damage_ratio",
             "ecm_coverage", "enemy_ecm_coverage", "environmental_cover", "environmental_hazards",
             "favorite_target_in_range", "flanking_position", "formation_cohesion", "formation_separation",
-            "formation_alignment", "friendly_artillery_fire", "covering_units", "heat_management",
+            "formation_alignment", "friendly_artillery_fire", "covering_units", # "heat_management",
             "enemy_vip_distance", "is_crippled",
             "moving_toward_waypoint", "unit_role", "threat_by_sniper", "threat_by_missile_boat",
             "threat_by_juggernaut", "unit_tmm", "piloting_caution", "retreat", "scouting",
             "standing_still", "strategic_goal", "target_health", "target_within_optimal_range",
-            "turns_to_encounter", "chance_of_failure", "self_threat_level"
+            "turns_to_encounter", "chance_of_failure", # "nearby_cover", "directional_cover",
+            # "full_cover_percentage", "partial_cover_percentage",
+            "max_range", "total_damage"
+            # "self_threat_level",
         ]
 
-        for n in range(16):
+        for n in range(8):
             _features.append("unit_role_" + str(n))
 
-        for n in range(100):
-            _features.append("enemy_threat_heatmap_" + str(n))
-
-        for n in range(100):
-            _features.append("friendly_threat_heatmap_" + str(n))
-
-        for n in range(self.ENEMIES_N):
-            _features.append("closest_enemy_" + str(n))
-
-        for n in range(self.ALLIES_N):
-            _features.append("closest_friend_" + str(n))
+        # for n in range(100):
+        #     _features.append("enemy_threat_heatmap_" + str(n))
+        #
+        # for n in range(100):
+        #     _features.append("friendly_threat_heatmap_" + str(n))
+        #
+        # for n in range(self.ENEMIES_N):
+        #     _features.append("closest_enemy_" + str(n))
+        #
+        # for n in range(self.ALLIES_N):
+        #     _features.append("closest_friend_" + str(n))
 
         # Add radar features - square grid
-        for y in range(self.RADAR_GRID_SIZE):
-            for x in range(self.RADAR_GRID_SIZE):
-                _features.append(f"radar_{y}_{x}")
+        # for y in range(self.RADAR_GRID_SIZE):
+        #     for x in range(self.RADAR_GRID_SIZE):
+        #         _features.append(f"radar_{y}_{x}")
 
         self.features = {feature: n for n, feature in enumerate(_features)}
 
         self.num_features = len(self.features)
+
+
+    def save_feature_statistics(self, x: np.ndarray, filename="feature_statistics.csv", comments=""):
+        """
+        Save feature statistics (min, max, variance) to a CSV file.
+        Rows entirely composed of zeros are excluded from variance calculation.
+        """
+        nonzero_rows = x[~np.all(x == 0, axis=1)]
+
+        with open(os.path.join(DATA_DIR, filename), mode='w', newline='') as csv_file:
+            csv_writer = csv.writer(csv_file)
+            csv_writer.writerow([f"# {comments}"])
+            csv_writer.writerow(["Feature Name", "Min Value", "Max Value", "Variance"])
+
+            for feature_name, idx in self.features.items():
+                col_values = nonzero_rows[:, idx]
+                min_val = col_values.min()
+                max_val = col_values.max()
+                variance = col_values.var()
+
+                csv_writer.writerow([feature_name, min_val, max_val, variance])
+
+        print(f"Feature statistics saved to {filename}")
+
+    def features_always_zero(self, x: np.ndarray):
+        """
+        Return a list of features that are always zero in the dataset.
+        """
+        always_zero_features = []
+
+        for feature_name, idx in self.features.items():
+            if np.all(x[:, idx] == 0):
+                always_zero_features.append(feature_name)
+
+        return always_zero_features
 
     @classmethod
     def filter_actions(cls, action):
@@ -102,7 +151,8 @@ class FeatureExtractor:
         'GunEmplacement', 'BattleArmor'}
 
     def extract_features(
-            self, unit_actions: List[Dict], game_states: List[List[Dict]], game_boards: List[GameBoardRepr]
+            self, unit_actions: List[Dict], game_states: List[List[Dict]], game_board: Union[GameBoardRepr, Dict],
+            iteration = 0
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Extract features from unit actions and game states.
@@ -110,7 +160,7 @@ class FeatureExtractor:
         Args:
             unit_actions: List of unit action dictionaries
             game_states: List of game state dictionaries
-            game_boards: List of game board representations
+            game_board: Game board representations
 
         Returns:
             X: Feature matrix
@@ -121,8 +171,7 @@ class FeatureExtractor:
         size = len(unit_actions)
         x = np.zeros((size, self.num_features))
         y = np.zeros(size)
-
-        for i, (action, state, game_board) in enumerate(tqdm(zip(unit_actions, game_states, game_boards))):
+        for i, (action, state) in enumerate(tqdm(zip(unit_actions, game_states))):
             if not self.filter_actions(action):
                 continue
 
@@ -130,38 +179,42 @@ class FeatureExtractor:
                 break
             state = {unit["entity_id"]: unit for unit in state}
 
+            environmental_hazards = self._calculate_environmental_hazards(action, game_board)
+
             # Basic features directly from unit action
             x[i, self.features["mp_percentage"]] = action.get("mp_p", 0)
             x[i, self.features["heat_percentage"]] = action.get("heat_p", 0)
             x[i, self.features["armor_percentage"]] = action.get("armor_p", 0)
             x[i, self.features["internal_percentage"]] = action.get("internal_p", 0)
             x[i, self.features["jumping"]] = action.get("jumping", 0)
-            x[i, self.features["distance_traveled"]] = 0 if action.get("max_mp", 10.0) == 0 else (
-                    action.get("distance", 0) / action.get("max_mp", 10.0))  # Normalize
-            x[i, self.features["hexes_moved"]] = 0 if action.get("max_mp", 10.0) == 0 else (
-                    action.get("hexes_moved", 0) / action.get("max_mp", 10.0))  # Normalize
-            x[i, self.features["chance_of_failure"]] = action.get("chance_of_failure", 0.0)
+            x[i, self.features["distance_traveled"]] = self._distance_action(action)
+            x[i, self.features["hexes_moved"]] =action.get("hexes_moved", 0)
+            x[i, self.features["chance_of_failure"]] = environmental_hazards * action.get("mp_p", 0)
+            x[i, self.features["max_range"]] = action.get("max_range", 0.0)
+            x[i, self.features["total_damage"]] = action.get("total_damage", 0.0)
 
-            # More complex features derived from both action and state
-            # These would normally be computed by your Java calculators
-            # Here we're using simpler approximations
             x[i, self.features["is_facing_enemy"]] = self._calculate_facing_enemy(action, state)
             x[i, self.features["enemy_in_range"]] = self._calculate_enemy_in_range(action, state)
-            x[i, self.features["cover_value"]] = self._calculate_cover(action, state)
+            # x[i, self.features["cover_value"]] = self._calculate_cover(action, state)
             x[i, self.features["allies_nearby"]] = self._calculate_allies_nearby(action, state)
             x[i, self.features["enemies_nearby"]] = self._calculate_enemies_nearby(action, state)
-            x[i, self.features["team_cohesion"]] = self._calculate_team_cohesion(action, state)
             x[i, self.features["unit_health_average"]] = self._calculate_unit_health_average(action)
-            x[i, self.features["unit_health_front"]] = self._calculate_unit_health_front(action)
-            x[i, self.features["unit_health_right"]] = self._calculate_unit_health_right(action)
-            x[i, self.features["unit_health_left"]] = self._calculate_unit_health_left(action)
-            x[i, self.features["unit_health_back"]] = self._calculate_unit_health_back(action)
-            x[i, self.features["position_crowding"]] = self._calculate_position_crowding(action, state)
+
+            health = self._arc_armor_damage(action)
+            x[i, self.features["unit_health_front"]] = health[0]
+            x[i, self.features["unit_health_right"]] = health[2]
+            x[i, self.features["unit_health_left"]] = health[4]
+            x[i, self.features["unit_health_back"]] = health[3]
+
             x[i, self.features["damage_ratio"]] = self._calculate_damage_ratio(action, state)
             x[i, self.features["ecm_coverage"]] = self._calculate_ecm_coverage(action, state)
             x[i, self.features["enemy_ecm_coverage"]] = self._calculate_enemy_ecm_coverage(action, state)
-            x[i, self.features["environmental_cover"]] = self._calculate_environmental_cover(action, state)
-            x[i, self.features["environmental_hazards"]] = self._calculate_environmental_hazards(action)
+
+            cover_features = self._calculate_environmental_cover(action, state, game_board)
+            x[i, self.features["environmental_cover"]] = cover_features["total_cover"]
+
+            x[i, self.features["environmental_hazards"]] = environmental_hazards
+
             x[i, self.features["favorite_target_in_range"]] = self._calculate_favorite_target_in_range(action, state)
             x[i, self.features["flanking_position"]] = self._calculate_flanking_position(action, state)
             x[i, self.features["formation_cohesion"]] = self._calculate_formation_cohesion(action, state)
@@ -169,7 +222,7 @@ class FeatureExtractor:
             x[i, self.features["formation_alignment"]] = self._calculate_formation_alignment(action, state)
             x[i, self.features["friendly_artillery_fire"]] = self._calculate_friendly_artillery_fire(action, state)
             x[i, self.features["covering_units"]] = self._calculate_covering_units(action, state)
-            x[i, self.features["heat_management"]] = self._calculate_heat_management(action, state)
+            # x[i, self.features["heat_management"]] = self._calculate_heat_management(action, state)
             x[i, self.features["enemy_vip_distance"]] = self._calculate_enemy_vip_distance(action, state)
             x[i, self.features["is_crippled"]] = self._calculate_is_crippled(action, state)
             x[i, self.features["moving_toward_waypoint"]] = self._calculate_moving_toward_waypoint(action, state)
@@ -190,29 +243,29 @@ class FeatureExtractor:
             for n, value in enumerate(self._hot_encode_unit_role(action)):
                 x[i, self.features["unit_role_" + str(n)]] = value
 
-            for n, value in enumerate(self._n_threat(action, state, self.ENEMIES_N)):
-                x[i, self.features["closest_enemy_" + str(n)]] = value
+            # for n, value in enumerate(self._n_threat(action, state, self.ENEMIES_N)):
+            #     x[i, self.features["closest_enemy_" + str(n)]] = value
+            #
+            # for n, value in enumerate(self._n_threat_allies(action, state, self.ALLIES_N)):
+            #     x[i, self.features["closest_friend_" + str(n)]] = value
 
-            for n, value in enumerate(self._n_threat_allies(action, state, self.ALLIES_N)):
-                x[i, self.features["closest_friend_" + str(n)]] = value
+            # x[i, self.features["self_threat_level"]] = self._self_threat(action, state)
 
-            x[i, self.features["self_threat_level"]] = self._self_threat(action, state)
+            # enemy_threat_heatmap = self._calculate_enemy_threat_heatmap(action, state)
+            # friendly_threat_heatmap = self._calculate_friendly_threat_heatmap(action, state)
 
-            enemy_threat_heatmap = self._calculate_enemy_threat_heatmap(action, state)
-            friendly_threat_heatmap = self._calculate_friendly_threat_heatmap(action, state)
-
-            for n in range(100):
-                x[i, self.features["enemy_threat_heatmap_" + str(n)]] = enemy_threat_heatmap[n]
-            for n in range(100):
-                x[i, self.features["friendly_threat_heatmap_" + str(n)]] = friendly_threat_heatmap[n]
+            # for n in range(100):
+            #     x[i, self.features["enemy_threat_heatmap_" + str(n)]] = enemy_threat_heatmap[n]
+            # for n in range(100):
+            #     x[i, self.features["friendly_threat_heatmap_" + str(n)]] = friendly_threat_heatmap[n]
 
             # Calculate and add radar features
-            radar = self._calculate_unit_radar_features(action, state)
-            for y_idx in range(self.RADAR_GRID_SIZE):
-                for x_idx in range(self.RADAR_GRID_SIZE):
-                    feature_name = f"radar_{y_idx}_{x_idx}"
-                    feature_idx = self.features[feature_name]
-                    x[i, feature_idx] = radar[y_idx, x_idx]
+            # radar = self._calculate_unit_radar_features(action, state)
+            # for y_idx in range(self.RADAR_GRID_SIZE):
+            #     for x_idx in range(self.RADAR_GRID_SIZE):
+            #         feature_name = f"radar_{y_idx}_{x_idx}"
+            #         feature_idx = self.features[feature_name]
+            #         x[i, feature_idx] = radar[y_idx, x_idx]
 
             reward = self.reward_calculator(action, state, game_states[i:])
 
@@ -222,30 +275,21 @@ class FeatureExtractor:
 
     @classmethod
     def _hot_encode_unit_role(cls, action):
-        role = action.get("role", "UNDETERMINED")
+        role = (action.get("role") or "NONE").upper().replace(" ", "_")
         roles = [
-            "UNDETERMINED",
-            "NONE",
             "AMBUSHER",
             "BRAWLER",
-
             "JUGGERNAUT",
             "MISSILE_BOAT",
             "SCOUT",
             "SKIRMISHER",
-
             "SNIPER",
             "STRIKER",
-            "ATTACK_FIGHTER",
-            "DOGFIGHTER",
-
-            "FAST_DOGFIGHTER",
-            "FIRE_SUPPORT",
-            "INTERCEPTOR",
-            "TRANSPORT"
         ]
-
-        return [1.0 if r == role else 0.0 for r in roles]
+        encoding = [0] * len(roles)
+        if role in roles:
+            encoding[roles.index(role)] = 1
+        return encoding
 
     def _calculate_unit_radar_features(self, action: Dict, state: Dict) -> np.ndarray:
         """
@@ -515,24 +559,30 @@ class FeatureExtractor:
         return np.sqrt((unit.get("x", 0) - x) ** 2 + (unit.get("y", 0) - y) ** 2)
 
     @classmethod
+    def _distance_action(cls, action):
+        if action.get("from_x", -1) == -1:
+            return 0
+        return np.sqrt((action.get("from_x") - action.get("to_x")) ** 2 + (action.get("from_y") - action.get("to_y")) ** 2)
+
+    @classmethod
     def _calculate_unit_health_average(cls, action) -> float:
         return clamp01(action.get("armor_p", 0) + action.get("internal_p", 0) / 2)
 
     @classmethod
     def _calculate_unit_health_front(cls, action):
-        return cls._calculate_unit_health_average(action)
+        return clamp01(action.get("armor_p", 0) + action.get("internal_p", 0) / 2)
 
     @classmethod
     def _calculate_unit_health_right(cls, action):
-        return cls._calculate_unit_health_average(action)
+        return clamp01(action.get("armor_p", 0) + action.get("internal_p", 0) / 2)
 
     @classmethod
     def _calculate_unit_health_left(cls, action):
-        return cls._calculate_unit_health_average(action)
+        return clamp01(action.get("armor_p", 0) + action.get("internal_p", 0) / 2)
 
     @classmethod
     def _calculate_unit_health_back(cls, action):
-        return cls._calculate_unit_health_average(action)
+        return clamp01(action.get("armor_p", 0) + action.get("internal_p", 0) / 2)
 
     @classmethod
     def _calculate_position_crowding(cls, action, state):
@@ -555,6 +605,42 @@ class FeatureExtractor:
         return enemies
 
     @classmethod
+    def _arc_damage_potential(cls, action):
+        return {
+            0: action.get('arc_0', 0),  # N
+            1: action.get('arc_1', 0),  # NE
+            2: action.get('arc_2', 0),  # SE
+            3: action.get('arc_3', 0),  # S
+            4: action.get('arc_4', 0),  # SW
+            5: action.get('arc_5', 0) # NW
+        }
+
+    @classmethod
+    def _arc_armor_damage(cls, action):
+        return {
+            0: action.get('armor_front', 0),  # N
+            1: action.get('armor_front', 0) / 3 * 2,  # NE
+            2: action.get('armor_right', 0) / 6,  # SE
+            3: action.get('armor_p', 0) / 10,  # S
+            4: action.get('armor_left', 0) / 6,  # SW
+            5: action.get('armor_front', 0) / 3 * 2  # NW
+        }
+
+    @classmethod
+    def _preferred_facing(cls, action):
+        damage_potentials = cls._arc_damage_potential(action)
+        armor_remaining = cls._arc_armor_damage(action)
+        choice = 0
+        percent_armor_on_choice = 0.0
+        potential_damage_from_choice = 0.0
+        for (key, damage), (_, armor_p) in zip(damage_potentials.items(), armor_remaining.items()):
+            if damage > potential_damage_from_choice and armor_p > percent_armor_on_choice:
+                choice = key
+                percent_armor_on_choice = armor_p
+                potential_damage_from_choice = damage
+        return choice
+
+    @classmethod
     def _calculate_facing_enemy(cls, action, state):
         """
         Calculate how well the unit is facing potential enemy threats.
@@ -562,6 +648,7 @@ class FeatureExtractor:
         """
         unit_facing = action.get("facing", 0)
         threatening_enemies = cls._threatening_enemies(action, state)
+        unit_prefered_facing = cls._preferred_facing(action)
 
         if threatening_enemies:
             dx = 0
@@ -573,7 +660,7 @@ class FeatureExtractor:
 
             dx /= n
             dy /= n
-            ideal_facing = (int(np.arctan2(dy, dx) * 3 / np.pi) + 3) % 6
+            ideal_facing = ((int(np.arctan2(dy, dx) * 3 / np.pi) + 3) + unit_prefered_facing) % 6
         else:
             ideal_facing = unit_facing
 
@@ -656,9 +743,8 @@ class FeatureExtractor:
                 # Count allies within a reasonable distance (e.g., 8 hexes)
                 if distance <= 8:
                     allies_count += 1
-        
-        # Normalize (capping at 6 allies)
-        return min(allies_count / 6.0, 1.0)
+
+        return allies_count
 
     @classmethod
     def _calculate_enemies_nearby(cls, action, state):
@@ -682,7 +768,7 @@ class FeatureExtractor:
                     enemies_count += 1
         
         # Normalize (capping at 8 enemies)
-        return clamp01(enemies_count / 8.0)
+        return enemies_count
 
     @classmethod
     def _calculate_team_cohesion(cls, action, state):
@@ -691,10 +777,7 @@ class FeatureExtractor:
         Related to FormationCohesionCalculator.
         """
         distance_to_center = cls.distance_to_team_center(action, state)
-
-        # Normalize distance (assuming a reasonable max distance of 20)
-        
-        return clamp01(1 - (distance_to_center / 20.0))
+        return distance_to_center
 
     @classmethod
     def _calculate_damage_ratio(cls, action, state):
@@ -723,7 +806,7 @@ class FeatureExtractor:
                         best_ratio = max(best_ratio, damage_ratio)
 
         # Normalize for a reasonable damage ratio range
-        return clamp01(best_ratio)
+        return best_ratio
 
     @classmethod
     def _calculate_ecm_coverage(cls, action, state):
@@ -734,7 +817,7 @@ class FeatureExtractor:
         has_ecm = action.get("ecm", 0) == 1
 
         if not has_ecm:
-            return 0.0
+            return 1.0
         
         # Count nearby friendly units with ECM
         unit_x = action.get("to_x", action.get("from_x", 0))
@@ -747,7 +830,7 @@ class FeatureExtractor:
                 overlapping_ecm = cls.count_overlapping_ecm(overlapping_ecm, unit, unit_x, unit_y)
         
         # Calculate ECM efficiency (1.0 for no overlap, decreases with overlaps)
-        ecm_efficiency = clamp01(1.0 / (overlapping_ecm + 1.0))
+        ecm_efficiency = 1.0 / (overlapping_ecm + 1.0)
         
         return ecm_efficiency
 
@@ -759,7 +842,7 @@ class FeatureExtractor:
             distance = np.sqrt((ally_x - unit_x) ** 2 + (ally_y - unit_y) ** 2)
 
             # ECM typically has a range of 6 hexes
-            if distance <= 6:
+            if distance <= 13:
                 overlapping_ecm += 1
         return overlapping_ecm
 
@@ -786,49 +869,440 @@ class FeatureExtractor:
             if unit.get("team_id", -1) != team_id:
                 overlapping_ecm = cls.count_overlapping_ecm(overlapping_ecm, unit, unit_x, unit_y)
 
-        return clamp01(1 /(overlapping_ecm + 1))
+        return min(overlapping_ecm, 1)
 
-    @classmethod
-    def _calculate_environmental_cover(cls, action, state):
+    def _calculate_environmental_cover(self, action, game_state, game_board):
         """
-        Calculate cover from terrain.
-        Based on EnvironmentalCoverCalculator.
+        Extract cover-related features for a unit's position.
+
+        Returns:
+            Dictionary of cover-related features
         """
-        # This would need information about terrain, which isn't directly available in our dataset
-        # Simplified approach based on distance to enemies
-        dist, _ = cls._closest_enemy(action, state)
-        
-        # Higher cover value when enemies are nearby
-        if dist < 7:
-            return 0.8
-        elif dist < 12:
-            return 0.6
-        elif dist < 24:
-            return 0.4
+        # Get unit position
+        unit_x = action["to_x"]
+        unit_y = action["to_y"]
+        position = (unit_x, unit_y)
+
+        # Determine unit height (like in Java version)
+        unit_type = action.get("type")
+        if unit_type:
+            if "AeroSpace" in unit_type:
+                unit_height = 999  # Very high for aerial units
+            else:
+                unit_height = 2 if "Mek" in unit_type else 1
         else:
-            return 0.2
+            unit_height = 2
+
+        # If unit is airborne, no cover applies
+        if unit_height == 999:
+            return self._create_empty_cover_features()
+
+        # Get enemy positions
+        team_id = action.get("team_id", -1)
+        enemy_positions = []
+        for unit in game_state.values():
+            if unit.get("team_id", -1) != team_id:
+                enemy_positions.append((unit.get("x", 0), unit.get("y", 0)))
+
+        # Limit number of enemy positions to consider
+        enemy_positions = enemy_positions[:4]
+
+        # Get base elevation level
+        base_level = self._get_terrain_level(game_board, position)
+
+        # Calculate cover features
+        starting_cover = self._calculate_starting_cover(game_board, position, unit_height, base_level)
+        cover_towards_enemies = self._calculate_cover_towards_enemies(
+            game_board, position, unit_height, enemy_positions, base_level)
+
+        total_cover = starting_cover + cover_towards_enemies
+
+        # Create feature dictionary
+        features = {
+            "total_cover": total_cover,
+            "nearby_cover": starting_cover,
+            "directional_cover": cover_towards_enemies,
+            "full_cover_percentage": self._calculate_full_cover_percentage(
+                game_board, position, unit_height, enemy_positions, base_level),
+            "partial_cover_percentage": self._calculate_partial_cover_percentage(
+                game_board, position, unit_height, enemy_positions, base_level)
+        }
+
+        return features
+
+    def _create_empty_cover_features(self):
+        """
+        Create a dictionary with zero values for all cover features.
+
+        Returns:
+            dict: Dictionary with zero-valued cover features
+        """
+        return {
+            "cover_value": 0.0,
+            "nearby_cover": 0.0,
+            "directional_cover": 0.0,
+            "full_cover_percentage": 0.0,
+            "partial_cover_percentage": 0.0
+        }
+
+    def _calculate_starting_cover(self, game_board, position, unit_height, base_level):
+        """
+        Calculate cover bonus from nearby terrain.
+
+        Args:
+            game_board: Game board representation
+            position: Unit's position as (x, y)
+            unit_height: Height of the unit
+            base_level: Base elevation level of the unit
+
+        Returns:
+            float: Cover bonus score from nearby terrain
+        """
+        bonus = 0.0
+
+        # Check surrounding hexes
+        nearby_hexes = self._get_all_coords_at_distance(position, 25)
+        for coord in nearby_hexes:
+            if coord == position:
+                continue
+
+            if self._has_full_cover(game_board, coord, base_level, unit_height):
+                bonus += 0.5
+            elif self._has_partial_cover(game_board, coord, base_level, unit_height):
+                bonus += 0.1
+
+        return bonus  # Cap at max value from original code
+
+    def _get_all_coords_at_distance(self, position, distance):
+        """
+        Get all coordinates at distance or less from position.
+
+        Args:
+            position: Center position as (x, y)
+            distance: Maximum distance
+
+        Returns:
+            List of (x, y) coordinates
+        """
+        x, y = position
+        coords = []
+
+        # Generate all hexes within distance
+        for dx in range(-distance, distance + 1):
+            for dy in range(max(-distance, -dx - distance), min(distance, -dx + distance) + 1):
+                coords.append((x + dx, y + dy))
+
+        return coords
+
+    def _game_board_has_position(self, position, game_board):
+        try:
+            hexes = game_board.get("hexes", [])
+            if hexes and position[1] < len(hexes) and position[0] < len(hexes[0]):
+                hex_info = hexes[position[1]][position[0]]
+                return bool(hex_info)
+        except (IndexError, AttributeError):
+            ...
+        return False
+
+    def _calculate_cover_towards_enemies(self, game_board, position, unit_height, enemy_positions, base_level):
+        """
+        Calculate cover bonus towards specific enemy positions.
+
+        Args:
+            game_board: Game board representation
+            position: Unit's position as (x, y)
+            unit_height: Height of the unit
+            enemy_positions: List of enemy positions as [(x, y)]
+            base_level: Base elevation level of the unit
+
+        Returns:
+            float: Cover bonus score
+        """
+        bonus = 0.0
+
+        for enemy_pos in enemy_positions:
+            # Get line of hexes between positions
+            between = self._line_between(position, enemy_pos)
+            wood_count = 0
+            has_partial_cover = False
+
+            for coord in between:
+                if coord == position:
+                    continue
+
+                if not self._game_board_has_position(position, game_board):
+                    continue
+
+                if self._has_full_cover(game_board, coord, base_level, unit_height):
+                    bonus += 1.0
+                    has_partial_cover = False
+                    break
+                elif self._has_partial_cover(game_board, coord, base_level, unit_height):
+                    has_partial_cover = True
+
+                if self._has_woods(game_board, coord):
+                    wood_count += 1
+                    if wood_count > 1:
+                        bonus += 1.0
+                        has_partial_cover = False
+                        break
+
+            if has_partial_cover:
+                bonus += 0.25
+
+        return bonus
+
+    def _calculate_partial_cover_percentage(self, game_board, position, unit_height, enemy_positions, base_level):
+        """
+        Calculate percentage of enemy positions with at least partial cover.
+
+        Args:
+            game_board: Game board representation
+            position: Unit's position as (x, y)
+            unit_height: Height of the unit
+            enemy_positions: List of enemy positions as [(x, y)]
+            base_level: Base elevation level of the unit
+
+        Returns:
+            float: Percentage (0.0-1.0) of enemy positions with at least partial cover
+        """
+        if not enemy_positions:
+            return 0.0
+
+        partial_cover_count = 0
+
+        for enemy_pos in enemy_positions:
+            between = self._line_between(position, enemy_pos)
+
+            for coord in between:
+                if coord == position:
+                    continue
+
+                # Check for any form of cover (full or partial)
+                if (self._has_full_cover(game_board, coord, base_level, unit_height) or
+                        self._has_partial_cover(game_board, coord, base_level, unit_height)):
+                    partial_cover_count += 1
+                    break
+
+                # Also count woods as partial cover
+                if self._has_woods(game_board, coord):
+                    partial_cover_count += 1
+                    break
+
+        return partial_cover_count / len(enemy_positions)
+
+    def _get_terrain_level(self, game_board, position):
+        """
+        Get terrain level at position.
+
+        Args:
+            game_board: Game board representation
+            position: (x, y) coordinates
+
+        Returns:
+            int: Elevation level at the position
+        """
+        x, y = position
+
+        try:
+            hexes = game_board.get("hexes", [])
+            if hexes and y < len(hexes) and x < len(hexes[y]):
+                hex_info = hexes[y][x]
+                return hex_info.get("floor", 0)
+        except (IndexError, AttributeError):
+            return 0
+
+        return 0
+
+    def _calculate_full_cover_percentage(self, game_board, position, unit_height, enemy_positions, base_level):
+        """
+        Calculate percentage of enemy positions with full cover.
+
+        Args:
+            game_board: Game board representation
+            position: Unit's position as (x, y)
+            unit_height: Height of the unit
+            enemy_positions: List of enemy positions as [(x, y)]
+            base_level: Base elevation level of the unit
+
+        Returns:
+            Float: Percentage (0.0-1.0) of enemy positions with full cover
+        """
+        if not enemy_positions:
+            return 0.0
+
+        full_cover_count = 0
+
+        for enemy_pos in enemy_positions:
+            # Get line of hexes between unit and enemy
+            between = self._line_between(position, enemy_pos)
+
+            for coord in between:
+                if coord == position:
+                    continue
+
+                # Check for full cover (terrain higher than unit height)
+                if self._has_full_cover(game_board, coord, base_level, unit_height):
+                    full_cover_count += 1
+                    break
+
+                # Also count double woods as full cover
+                if self._has_woods(game_board, coord):
+                    wood_count = sum(
+                        1 for c in between if c != position and self._has_woods(game_board, c))
+                    if wood_count > 1:
+                        full_cover_count += 1
+                        break
+
+        # Return percentage
+        return full_cover_count / len(enemy_positions)
 
     @classmethod
-    def _calculate_environmental_hazards(cls, action):
+    def _line_between(cls, from_pos, to_pos):
+        """
+        Calculate all coordinates in a line between two positions.
+
+        Args:
+            from_pos: Starting position as (x, y)
+            to_pos: Ending position as (x, y)
+
+        Returns:
+            List of (x, y) coordinates forming a line
+        """
+        x1, y1 = from_pos
+        x2, y2 = to_pos
+
+        # Calculate distance
+        distance = int(round(math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)))
+
+        # If distance is 0, return just the position
+        if distance == 0:
+            return [from_pos]
+
+        # Generate line of hexes
+        coords = []
+        for step in range(distance + 1):
+            t = step / distance if distance > 0 else 0
+            x = round(x1 + (x2 - x1) * t)
+            y = round(y1 + (y2 - y1) * t)
+            coord = (x, y)
+
+            # Only add if not already in the list
+            if not coords or coords[-1] != coord:
+                coords.append(coord)
+
+        return coords
+
+    @classmethod
+    def _has_full_cover(cls, game_board, position, base_level, unit_height):
+        """Check if position provides full cover."""
+        x, y = position
+
+        try:
+            hexes = game_board.get("hexes", [])
+            if hexes and y < len(hexes) and x < len(hexes[y]):
+                hex_info = hexes[y][x]
+                hex_level = hex_info.get("elevation", 0)
+                return hex_level >= base_level + unit_height
+        except (IndexError, AttributeError):
+            return False
+
+        return False
+
+    @classmethod
+    def _has_partial_cover(cls, game_board, position, base_level, unit_height):
+        """Check if position provides partial cover."""
+        x, y = position
+
+        try:
+            hexes = game_board.get("hexes", [])
+            if hexes and y < len(hexes) and x < len(hexes[y]):
+                hex_info = hexes[y][x]
+                hex_level = hex_info.get("elevation", 0)
+                return base_level < hex_level < (base_level + unit_height)
+        except (IndexError, AttributeError):
+            return False
+
+        return False
+
+    @classmethod
+    def _has_woods(cls, game_board, position):
+        """Check if position has woods."""
+        x, y = position
+
+        try:
+            hexes = game_board.get("hexes", [])
+            if hexes and y < len(hexes) and x < len(hexes[y]):
+                hex_info = hexes[y][x]
+                return hex_info.get("has_woods", False)
+        except (IndexError, AttributeError):
+            return False
+
+        return False
+
+    @classmethod
+    def _board_has_feature(cls, game_board, position, feature):
+        """Check if position has woods."""
+        x, y = position
+
+        try:
+            hexes = game_board.get("hexes", [])
+            if hexes and y < len(hexes) and x < len(hexes[y]):
+                hex_info = hexes[y][x]
+                return hex_info.get("has_" + feature, False)
+        except (IndexError, AttributeError):
+            return False
+
+        return False
+
+    @classmethod
+    def _calculate_environmental_hazards(cls, action, game_board):
         """
         Calculate terrain hazards at position.
         Based on EnvironmentalHazardsCalculator.
         """
         # Without terrain data, use a heuristic based on movement points
-        mp_p = action.get("mp_p", 0)
-
-        mp_used = action.get("mp_used", 0)
         hexes_moved = action.get("hexes_moved", 0)
+        if not hexes_moved:
+            return 0
 
         hazard_score = 0.0
-        if mp_used > hexes_moved:
-            hazard_score = 0.3 * mp_p
+        from_pos = (action.get("from_x", 0), action.get("from_y", 0))
+        to_pos = (action.get("to_x", 0), action.get("to_y", 0))
+        line = cls._line_between(from_pos, to_pos)
+        for pos in line:
+            hazard_score += cls.get_hazard_score_for_hex(game_board, pos)
 
         # Also consider jumping (which might avoid hazards)
         if action.get("jumping", 0) == 1:
             hazard_score = hazard_score * 0.5
         
-        return clamp01(hazard_score)
+        return hazard_score
+
+    @classmethod
+    def get_hazard_score_for_hex(cls, game_board, pos) -> int:
+        if any([cls._board_has_feature(game_board, pos, "rough"),
+               cls._board_has_feature(game_board, pos, "water")]):
+            return 1
+        elif any([cls._board_has_feature(game_board, pos, "pavement"),
+                 cls._board_has_feature(game_board, pos, "building")]):
+            return 1
+        elif any([cls._board_has_feature(game_board, pos, "rubbles"),
+                 cls._board_has_feature(game_board, pos, "fire"),
+                 cls._board_has_feature(game_board, pos, "smoke")]):
+            return 1
+        elif any([cls._board_has_feature(game_board, pos, "swamp"),
+                 cls._board_has_feature(game_board, pos, "mud")]):
+            return 1
+        elif any([cls._board_has_feature(game_board, pos, "magma"),
+                 cls._board_has_feature(game_board, pos, "geyser"),
+                 cls._board_has_feature(game_board, pos, "rapids")]):
+            return 1
+        elif any([cls._board_has_feature(game_board, pos, "ultra_sublevel"),
+                 cls._board_has_feature(game_board, pos, "hazardous_liquid"),
+                 cls._board_has_feature(game_board, pos, "fuel_tank")]):
+            return 1
+        return 0
 
     @classmethod
     def _calculate_flanking_position(cls, action, state):
@@ -1114,32 +1588,26 @@ class FeatureExtractor:
         """
         unit_x = action.get("to_x", action.get("from_x", 0))
         unit_y = action.get("to_y", action.get("from_y", 0))
-        team_id = action.get("team_id", -1)
+        team_id = action.get("team_id", -2)
         
         # Find closest "VIP" enemy (here we'll just use the enemy with the highest damage)
-        closest_vip_distance = float('inf')
-        
+        closest_vip_distance = 9999999
+        highest_bv = 0
         for unit in state.values():
             if unit.get("team_id", -1) != team_id:
                 # Determine if unit is VIP based on role or other criteria
                 # For simplicity, we'll consider high-damage units as VIPs
-                is_vip = unit.get("total_damage", 0) > 60
-                
+                is_vip = unit.get("bv", 0) > highest_bv
                 if is_vip:
-                    enemy_x = unit.get("x", 0)
-                    enemy_y = unit.get("y", 0)
-                    distance = np.sqrt((enemy_x - unit_x)**2 + (enemy_y - unit_y)**2)
-                    
+                    distance = cls._distance(unit_x, unit_y, unit)
+                    if distance == 0:
+                        continue
                     closest_vip_distance = min(closest_vip_distance, distance)
         
-        if closest_vip_distance == float('inf'):
-            return 0.0  # No VIPs found
-        
-        # Normalize distance (34 is approximately 2 boards width)
-        max_distance = action.get("max_range")
-        normalized_distance = max(0, 1 - (closest_vip_distance / max_distance))
-        
-        return normalized_distance
+        if closest_vip_distance == 9999999:
+            return 0.0
+
+        return closest_vip_distance
 
     @classmethod
     def _calculate_is_crippled(cls, action, state):
@@ -1199,7 +1667,7 @@ class FeatureExtractor:
         Calculate how well the unit performs its role.
         Based on UnitRoleCalculator.
         """
-        role = action.get("role", "NONE")
+        role = (action.get("role", "NONE") or "NONE").upper()
         max_range = action.get("max_range", 0)
         # Calculate score based on role
         role_score = 0.5  # Default
@@ -1237,7 +1705,7 @@ class FeatureExtractor:
             to_divide_for = min(7, action.get("max_range", 7))
             role_score = clamp01(0.7 * enemies_close_by) * (clamp01(1 - (distance / to_divide_for)) * 0.3)
 
-        return clamp01(role_score)
+        return role_score
 
     @staticmethod
     def _calculate_unit_tmm(action):
@@ -1267,7 +1735,7 @@ class FeatureExtractor:
         if hexes_moved == 0:
             tmm -= 4
 
-        return clamp01(tmm / 7)
+        return tmm
 
     def _calculate_piloting_caution(self, action):
         """
@@ -1276,14 +1744,13 @@ class FeatureExtractor:
         """
         # Consider chance of failure (PSR checks)
         chance_of_failure = action.get("chance_of_failure", 0.0)
-        
-        # Also consider terrain hazards
-        hazard_level = self._calculate_environmental_hazards(action)
-        
-        # Combine factors
-        caution_score = max(chance_of_failure, hazard_level)
-        
-        return caution_score
+        max_mp = action.get("max_mp", 0)
+        hexes_moved = action.get("hexes_moved", 0)
+
+        if chance_of_failure == 0.0:
+            chance_of_failure = hexes_moved / (max_mp + 1) / 10
+
+        return chance_of_failure
 
     @classmethod
     def _calculate_standing_still(cls, action):
@@ -1305,13 +1772,13 @@ class FeatureExtractor:
         _, closest_enemy = self._closest_enemy(action, state)
         
         if closest_enemy is None:
-            return 0.5  # No target
+            return 0
         
         # Get enemy health
-        armor_percentage = closest_enemy.get("armor_p", 0)
-        internal_percentage = closest_enemy.get("internal_p", 0)
+        armor_percentage = closest_enemy.get("armor", 0)
+        internal_percentage = closest_enemy.get("internal", 0)
 
-        return (armor_percentage + internal_percentage) / 2
+        return armor_percentage + internal_percentage
 
     @classmethod
     def _calculate_target_within_optimal_range(cls, action, state):
@@ -1457,17 +1924,14 @@ class FeatureExtractor:
         """
         closest_distance, enemy = cls._closest_enemy(action, state)
         if closest_distance == float('inf'):
-            return 0.0  # No enemies
+            return -1.0  # No enemies
         
         # Estimate turns based on average movement per turn (e.g., 5 hexes)
-        avg_movement_per_turn = enemy.get("mp", 0)
-        if avg_movement_per_turn == 0:
-            avg_movement_per_turn = float('inf')
+        avg_movement_per_turn = max(enemy.get("mp", 0) + action.get("max_mp", 0), 1)
 
         turns_to_encounter = closest_distance / avg_movement_per_turn
-        
-        # Normalize (assuming max 5 turns is far future)
-        return clamp01(1 - (turns_to_encounter / 5))
+
+        return turns_to_encounter
 
     @classmethod
     def _calculate_enemy_threat_heatmap(cls, action, state):
@@ -1751,10 +2215,10 @@ class FeatureExtractor:
         dispute_weight = 0.3
 
         # Calculate final strategic score
-        strategic_score = (control_weight * clamp01(control_improvement + 0.5)) + \
-                          (dispute_weight * clamp01(dispute_improvement + 0.5))
+        strategic_score = ((control_weight * (control_improvement + 0.5)) +
+                           (dispute_weight * clamp01(dispute_improvement + 0.5)))
 
-        return clamp01(strategic_score)
+        return strategic_score
 
     @classmethod
     def _calculate_area_control(cls, team_units, radius, grid_size):
@@ -1880,7 +2344,7 @@ class FeatureExtractor:
         unit_y = action.get("to_y", action.get("from_y", 0))
         team_id = action.get("team_id", -1)
         unit_id = action.get("entity_id", -1)
-        self_max_range = action.get("max_range")
+        self_max_range = max(action.get("max_range", 0), 0)
         artillery_support = 0
         
         for unit in state.values():
@@ -1897,7 +2361,7 @@ class FeatureExtractor:
                     if distance <= 17:  # Artillery support range
                         artillery_support = max(artillery_support, max_range - 17)
 
-        return clamp01(artillery_support / (self_max_range + 1))
+        return artillery_support / (self_max_range + 1)
 
     @classmethod
     def _calculate_threat_by_sniper(cls, action, state):
@@ -1952,9 +2416,8 @@ class FeatureExtractor:
                     distance_factor = 1 - (distance / max_range)
                     
                     threat_level += damage_factor * distance_factor
-        
-        # Cap at 1.0
-        return clamp01(threat_level)
+
+        return threat_level
 
     @classmethod
     def calculate_reward(cls, previous_state, current_state, action_taken, all_previous_units, all_current_units):
@@ -2264,38 +2727,52 @@ class ClassifierFeatureExtractor(FeatureExtractor):
       Extends the FeatureExtractor to add movement classification capabilities.
       """
     # Movement class constants
-    AGGRESSIVE_ADVANCE = "AGGRESSIVE_ADVANCE"
-    STRATEGIC_WITHDRAWAL = "STRATEGIC_WITHDRAWAL"
-    FLANKING_MANEUVER = "FLANKING_MANEUVER"
-    DEFENSIVE_POSITIONING = "DEFENSIVE_POSITIONING"
-    FORMATION_MAINTENANCE = "FORMATION_MAINTENANCE"
-    SCOUTING = "SCOUTING"
-    FIRE_SUPPORT = "FIRE_SUPPORT"
-    COVER_PROVISION = "COVER_PROVISION"
-    OBJECTIVE_SECURING = "OBJECTIVE_SECURING"
 
-    # Secondary property constants
-    HEAT_MANAGEMENT = "HEAT_MANAGEMENT"
-    TERRAIN_EXPLOITATION = "TERRAIN_EXPLOITATION"
-    LOS_CONTROL = "LOS_CONTROL"
+    HOLD_POSITION = "HOLD_POSITION"
+    OFFENSIVE = "OFFENSIVE"
+    DEFENSIVE = "DEFENSIVE"
 
     def __init__(self):
         super().__init__()
         # Define class mapping for one-hot encoding
         self.movement_classes = {
-            self.AGGRESSIVE_ADVANCE: 0,
-            self.STRATEGIC_WITHDRAWAL: 1,
-            self.FLANKING_MANEUVER: 2,
-            self.DEFENSIVE_POSITIONING: 3,
-            self.FORMATION_MAINTENANCE: 4,
-            self.SCOUTING: 5,
-            self.FIRE_SUPPORT: 6,
-            self.COVER_PROVISION: 7,
-            self.OBJECTIVE_SECURING: 8
+            self.OFFENSIVE: 0,
+            self.DEFENSIVE: 1,
+            self.HOLD_POSITION: 2,
         }
 
         # Number of classes for model output
         self.num_classes = len(self.movement_classes)
+
+    @staticmethod
+    def describe_class_frequency(y):
+        """
+        Describe class weights for the training set.
+        This helps address class imbalance issues.
+
+        Args:
+            y_train: One-hot encoded class labels
+
+        Returns:
+            Dictionary mapping class indices to weights
+        """
+        # Convert one-hot encoded labels to class indices
+        if len(y.shape) > 1:
+            y_indices = np.argmax(y, axis=1)
+        else:
+            y_indices = y
+
+        movement_classes_inverse = {
+            0: "OFFENSIVE",
+            1: "DEFENSIVE",
+            2: "HOLD_POSITION",
+        }
+
+        # Calculate class counts
+        class_counts = np.bincount(y_indices)
+        n_samples = len(y_indices)
+
+        return {movement_classes_inverse[i]: count / n_samples for i, count in enumerate(class_counts)}
 
     @staticmethod
     def create_class_weights(y_train):
@@ -2333,7 +2810,9 @@ class ClassifierFeatureExtractor(FeatureExtractor):
 
         return class_weights
 
-    def extract_classification_features(self, unit_actions, game_states, game_boards):
+
+    def extract_classification_features(self, unit_actions: List[Dict], game_states: List[List[Dict]],
+                                        game_board: Union[GameBoardRepr, Dict], tags: List[Tuple[int, List]], iteration=0):
         """
         Extract features and classify movements for unit actions and game states.
 
@@ -2346,176 +2825,103 @@ class ClassifierFeatureExtractor(FeatureExtractor):
             y: One-hot encoded class labels
         """
         # First extract basic features using parent class method
-        x, _ = super().extract_features(unit_actions, game_states, game_boards)
-
-        # Initialize class labels array
-        y = np.zeros((x.shape[0], self.num_classes))
-
-        for i, (action, state, game_board) in enumerate(zip(unit_actions, game_states, game_boards)):
-            if i >= len(x):
-                break
-
-            # Convert state list to dictionary for easier access
-            state_dict = {unit["entity_id"]: unit for unit in state}
-
-            # Classify the movement
-            primary_class, secondary_properties = self._classify_movement(action, state_dict, game_board)
-
-            # Set the appropriate class in one-hot encoded array
-            class_index = self.movement_classes.get(primary_class, 0)
-            y[i, class_index] = 1.0
+        x, _ = super().extract_features(unit_actions, game_states, game_board, iteration)
+        y = self.one_hot_encoded_classification(tags)
 
         return x, y
 
-    def _classify_movement(self, action, state, game_board):
+    def one_hot_encoded_classification(self, tags):
+        y = np.zeros((len(tags), self.num_classes))
+        for i, tag in enumerate(tags):
+            class_index = self.movement_classes.get(tags[tag]["classification"], 0)
+            y[i, class_index] = 1.0
+        return y
+
+    def analyze_feature_correlations(self, x):
         """
-        Determine the class of a movement based on action and state data.
+        Identify highly correlated features that may be redundant.
+        """
+
+        # Convert X to a DataFrame for easier correlation analysis
+        feature_names = list(self.features.keys())
+        df = pd.DataFrame(x, columns=feature_names)
+
+        # Calculate correlation matrix
+        corr_matrix = df.corr().abs()
+
+        # Create mask for upper triangle
+        upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+
+        # Find pairs of features with correlation above threshold
+        threshold = 0.85
+        high_corr_indices = np.where(upper > threshold)
+
+        # Create list of high correlation pairs
+        high_corr_pairs = [(
+            feature_names[high_corr_indices[0][i]],  # First feature
+            feature_names[high_corr_indices[1][i]],  # Second feature
+            corr_matrix.iloc[high_corr_indices[0][i], high_corr_indices[1][i]]  # Correlation value
+        ) for i in range(len(high_corr_indices[0]))]
+
+        return corr_matrix, high_corr_pairs
+
+    def analyze_features(self, X, y=None, model=None, visualize=True):
+        """
+        Analyze features for redundancy and importance.
 
         Args:
-            action: Dictionary containing the movement action
-            state: Dictionary containing unit states (entity_id -> unit state)
-            game_board: Game board data
+            X: Feature matrix
+            y: Optional target values (needed if model is provided but not trained)
+            model: Optional ML model for importance analysis
+            visualize: Whether to visualize the correlation matrix
 
         Returns:
-            primary_class: String indicating the primary movement class
-            secondary_properties: List of secondary movement properties
+            Dictionary with analysis results
         """
-        # Extract relevant features
-        unit_id = action.get("entity_id", -1)
-        team_id = action.get("team_id", -2)
-        from_x, from_y = action.get("from_x", 0), action.get("from_y", 0)
-        to_x, to_y = action.get("to_x", 0), action.get("to_y", 0)
-        unit_role = action.get("role", "NONE")
+        analyzer = FeatureAnalyzer(correlation_threshold=0.85)
+        feature_names = list(self.features.keys())
 
-        # Calculate health percentage
-        health_percentage = (action.get("armor_p", 0) + action.get("internal_p", 0)) / 2
+        # Analyze correlations
+        corr_matrix, high_corr_pairs = analyzer.analyze_feature_correlations(X, feature_names)
 
-        # Find enemy and allied units
-        enemies = [u for u in state.values() if u.get("team_id", -1) != team_id]
-        allies = [u for u in state.values()
-                  if u.get("team_id", -1) == team_id and u.get("entity_id", -1) != unit_id]
+        # Visualize correlation matrix
+        if visualize:
+            analyzer.visualize_correlation_matrix(corr_matrix, f'{len(X)}_{model}.png')
+            correlation_table = analyzer.display_correlation_table(corr_matrix, top_n=20)
+            print(correlation_table)
 
-        # Calculate distances
-        old_closest_enemy_dist = min([self.calculate_distance(from_x, from_y, e.get("x", 0), e.get("y", 0))
-                                      for e in enemies], default=float('inf'))
-        new_closest_enemy_dist = min([self.calculate_distance(to_x, to_y, e.get("x", 0), e.get("y", 0))
-                                      for e in enemies], default=float('inf'))
+        # Calculate feature importance if model is provided
+        importance_scores = {}
+        if model is not None:
+            # Train model if y is provided and model isn't already trained
+            if y is not None and not hasattr(model, 'feature_importances_') and not hasattr(model, 'coef_'):
+                model.fit(X, y)
 
-        # Team centroid
-        if allies:
-            team_x = sum(a.get("x", 0) for a in allies) / len(allies)
-            team_y = sum(a.get("y", 0) for a in allies) / len(allies)
+            importance_scores = analyzer.calculate_feature_importance(model, feature_names)
 
-            # Distance to team centroid
-            old_team_dist = self.calculate_distance(from_x, from_y, team_x, team_y)
-            new_team_dist = self.calculate_distance(to_x, to_y, team_x, team_y)
-        else:
-            old_team_dist = 0
-            new_team_dist = 0
+            if visualize and importance_scores:
+                # Plot feature importance
+                importances = [(feature, score) for feature, score in importance_scores.items()]
+                importances.sort(key=lambda x: x[1], reverse=True)
+                top_features = importances[:20]  # Top 20 features
 
-        # Determine primary class based on movement patterns
-        primary_class = None
-        secondary_properties = []
+                plt.figure(figsize=(12, 8))
+                y_pos = np.arange(len(top_features))
+                feature_names = [f[0] for f in top_features]
+                feature_scores = [f[1] for f in top_features]
 
-        if new_closest_enemy_dist < old_closest_enemy_dist:
-            if unit_role in ["JUGGERNAUT", "BRAWLER"]:
-                primary_class = self.AGGRESSIVE_ADVANCE
-            elif unit_role in ["STRIKER", "SKIRMISHER"] and new_closest_enemy_dist <= action.get("max_range", 20) * 0.7:
-                primary_class = self.AGGRESSIVE_ADVANCE
-            elif self._check_flanking_position(action, state):
-                primary_class = self.FLANKING_MANEUVER
-            else:
-                primary_class = self.AGGRESSIVE_ADVANCE
-        elif new_closest_enemy_dist > old_closest_enemy_dist:
-            if health_percentage < 0.5 or action.get("crippled", 0) == 1:
-                primary_class = self.STRATEGIC_WITHDRAWAL
-            elif unit_role in ["SNIPER", "MISSILE_BOAT"] and new_closest_enemy_dist > action.get("max_range", 20) * 0.5:
-                primary_class = self.FIRE_SUPPORT
-            else:
-                primary_class = self.STRATEGIC_WITHDRAWAL
-        elif allies and new_team_dist < old_team_dist and old_team_dist > 5:
-            primary_class = self.FORMATION_MAINTENANCE
-        elif unit_role == "SCOUT" and allies and new_team_dist > old_team_dist:
-            primary_class = self.SCOUTING
-        elif self._check_defensive_position(action, state):
-            primary_class = self.DEFENSIVE_POSITIONING
-        elif self._check_covering_position(action, state, allies):
-            primary_class = self.COVER_PROVISION
-        else:
-            # Default class based on role and position
-            if unit_role in ["SNIPER", "MISSILE_BOAT"]:
-                primary_class = self.FIRE_SUPPORT
-            elif unit_role in ["SCOUT"]:
-                primary_class = self.SCOUTING
-            elif unit_role in ["STRIKER", "SKIRMISHER"]:
-                primary_class = self.FLANKING_MANEUVER
-            elif unit_role in ["JUGGERNAUT", "BRAWLER"]:
-                primary_class = self.AGGRESSIVE_ADVANCE
-            else:
-                primary_class = self.FORMATION_MAINTENANCE
+                plt.barh(y_pos, feature_scores, align='center')
+                plt.yticks(y_pos, feature_names)
+                plt.xlabel('Feature Importance')
+                plt.title('Top 20 Most Important Features')
+                plt.tight_layout()
+                plt.savefig('feature_importance.png')
+                plt.close()
 
-        # Determine secondary properties
-        if action.get("heat_p", 0) > 0.7 and action.get("jumping", 0) == 0:
-            secondary_properties.append(self.HEAT_MANAGEMENT)
+                print("Feature importance chart saved to feature_importance.png")
 
-        # Check for terrain exploitation
-        if self._check_terrain_exploitation(action, state):
-            secondary_properties.append(self.TERRAIN_EXPLOITATION)
-
-        # Check for line of sight control
-        if self._check_line_of_sight_control(action, state):
-            secondary_properties.append(self.LOS_CONTROL)
-
-        return primary_class, secondary_properties
-
-    def _check_flanking_position(self, action, state):
-        """
-        Check if the movement is a flanking maneuver.
-
-        This would check if the unit moved to a position that targets enemy sides/rear.
-        Uses the flanking position feature that's already being calculated.
-        """
-        flanking_score = self._calculate_flanking_position(action, state)
-        return flanking_score > 0.7  # Consider high flanking scores as flanking maneuvers
-
-    def _check_defensive_position(self, action, state):
-        """
-        Check if the movement puts the unit in a defensive position.
-
-        Uses the cover value feature that's already being calculated.
-        """
-        cover_value = self._calculate_cover(action, state)
-        return cover_value > 0.7  # Consider high cover values as defensive positions
-
-    def _check_covering_position(self, action, state, allies):
-        """
-        Check if the movement puts the unit in position to cover allies.
-
-        Uses the covering units feature that's already being calculated.
-        """
-        covering_score = self._calculate_covering_units(action, state)
-        return covering_score > 0.7  # Consider high covering scores as covering positions
-
-    def _check_terrain_exploitation(self, action, state):
-        """
-        Check if the movement exploits terrain features.
-
-        Uses the environmental cover feature that's already being calculated.
-        """
-        terrain_score = self._calculate_environmental_cover(action, state)
-        return terrain_score > 0.7  # Consider high environmental cover as terrain exploitation
-
-    def _check_line_of_sight_control(self, action, state):
-        """
-        Check if the movement is meant to control line of sight.
-
-        This is a more complex determination that could look at position changes
-        relative to enemies and allies.
-        """
-        # Placeholder implementation - could be enhanced based on your game mechanics
-        # A simple check might be if the unit moved to a position where it can see enemies
-        # but they can't easily see it (e.g., behind cover with good firing lines)
-        cover = self._calculate_cover(action, state)
-        enemies_in_range = self._calculate_enemy_in_range(action, state)
-
-        return cover > 0.5 and enemies_in_range > 0.7  # Can see enemies but has some cover
+        return {
+            'correlation_matrix': corr_matrix,
+            'high_correlation_pairs': high_corr_pairs,
+            'feature_importance': importance_scores
+        }

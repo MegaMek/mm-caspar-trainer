@@ -114,7 +114,7 @@ class ModelTrainer:
                 mode='max',  # Changed from 'min' to 'max' as higher F1 is better
                 save_best_only=True,
                 save_freq='epoch',
-                initial_value_threshold=0.0,  # Start from zero for F1
+                verbose=1
             )
 
             # Train the model
@@ -177,6 +177,31 @@ class ClassificationModelTrainer(ModelTrainer):
             mlflow_tracking_uri: URI for MlFlow tracking server
         """
         super().__init__(model, experiment_name, mlflow_tracking_uri)
+
+    def test(self, x, y, model_name, run_name, batch_size):
+
+        with mlflow.start_run(run_name=run_name, log_system_metrics=True) as run:
+            checkpoint_dir = os.path.join(CHECKPOINT_DIR, f"{run.info.run_id}")
+            model_dir = os.path.join(os.path.join(CHECKPOINT_DIR, f"{run.info.run_id}"), "model")
+
+            # Log model parameters
+            self.mlflow_setup_log(batch_size, 1, {})
+
+            evaluation_results = self.model.model.evaluate(x, y, use_multiprocessing=True, verbose=1, return_dict=True)
+
+            for metric_name, metric_value in evaluation_results.items():
+                mlflow.log_metric(f"test_{metric_name}", metric_value)
+
+            # Log the model with its signature
+            model_artifact_path = model_name if model_name else "model"
+            model_uri = f"runs:/{run.info.run_id}/{model_artifact_path}"
+            mlflow.tensorflow.log_model(
+                self.model.model,
+                model_uri,
+                signature=self.model.get_mlflow_signature()
+            )
+            mlflow.register_model(model_uri, model_name)
+            mlflow.tensorflow.save_model(self.model.model, model_dir)
 
     def train(self, x_train: np.ndarray, y_train: np.ndarray, x_val: np.ndarray, y_val: np.ndarray,
               epochs: int = 16, batch_size: int = 32, model_name: str = None, run_name: str = None,

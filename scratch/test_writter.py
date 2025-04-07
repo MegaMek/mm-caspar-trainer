@@ -51,11 +51,11 @@ echo "Running CPU-optimized Hyperparameter Search..."
     for batch_step in range(5, 250, 10):
         for dropout in range(0, 50, 5):
             a = (f"python -m caspar.__main__ "
-              f"--hidden-layers 354 354 "
-              f"--dropout-rate {dropout / 100} "
+              f"--hidden-layers 64 128 32 "
+              f"--dropout-rate 015 "
               f"--batch {batch_step} "
-              f"--epochs 50 "
-              f"--learning-rate 0.01 & \\\n")
+              f"--epochs 500 "
+              f"--learning-rate 0.1 & \\\n")
             f.write(a)
             line += 1
 

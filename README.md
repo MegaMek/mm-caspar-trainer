@@ -1,3 +1,4 @@
+
 # MM-Caspar-Trainer
 ## CASPAR Neural Network Training Framework
 
@@ -53,20 +54,88 @@ Before training the model, you need to prepare the datasets. The `--data` flag i
 3. Splitting the data into training, validation, and test sets
 4. Saving the processed datasets for future use by training processes
 
-To prepare the data:
+To prepare the data, it will make the tagged datasets available in the `datasets_tagged` directory. Then we prepare the training data, it will generate the `training_data.csv` file and numpy array bins with the data
+for training, validation and test sets:
 
 ```bash
-python __main__.py --data
+# Generate tagged datasets
+python -m caspar.__main__ --parse-datasets
+
+# Generate training data (using undersampling by default)
+python -m caspar.__main__ --extract-features
+
+# Generate training data with oversampling
+python -m caspar.__main__ --extract-features --oversample
 ```
+
+### Data Directory Structure
+The data directory should contain the following structure:
+
+```
+caspar/
+├── data (generated, used for training models)
+│   ├── _xx_xxxx_feature_statistics.csv 
+│   ├── class_info.json
+│   ├── min_max_feature_normalization.csv
+│   ├── x_test.npy
+│   ├── x_train.npy
+│   ├── x_val.npy
+│   ├── y_test.npy
+│   ├── y_train.npy
+│   ├── y_test.npy
+│   ├── training_data.csv
+│   └── ...
+├── datasets (raw data)
+│   ├── human_games
+│   │   ├── game_actions_0.tsv
+│   │   └── ...
+│   └── human_vs_princess_games
+│       ├── game_actions_0.tsv
+│       └── ...
+├── resources (used to enrich older datasets, not provided here due)
+│   └── meks.tsv
+└── datasets_tagged (generated )
+    ├── dataset_0_64_actions.json
+    ├── dataset_0_108_actions.json
+    └── ...
+```
+
 
 ## Model Training
 
-### Basic Training
+You can manually set the configuration of the model by passing the parameters in the command line or by editing the `config.py` file.
 
-To train the model with default parameters:
+```python
+# config.py
+
+# Model settings
+MODEL_CONFIG = {
+    "hidden_layers": [1036, 1036, 130, 518, 340, 130, 65, 130],
+    "dropout_rate": 0.18344289381176082,
+    "learning_rate": 0.016544355731452045
+}
+
+# Training settings
+TRAINING_CONFIG = {
+    "test_size": 0.1,
+    "validation_size": 0.1,
+    "epochs": 500,
+    "batch_size": 128,
+}
+
+```
+
+Then we train the model with the data we just generated.
 
 ```bash
-python __main__.py
+# Train with default configuration
+python -m caspar.__main__ 
+
+# Train with custom parameters
+python -m caspar.__main__ --epochs 100 --batch-size 64 --learning-rate 0.01 --dropout-rate 0.3 --hidden-layers 354 354
+
+# Train with custom experiment name
+python -m caspar.__main__ --experiment-name "my-experiment" --run-name "test-run-1"
 ```
 
 ### Customizing Training Parameters
@@ -82,7 +151,7 @@ python __main__.py --epochs 100 --batch-size 64 --learning-rate 0.01 --dropout-r
 The framework includes hyperparameter optimization using Optuna:
 
 ```bash
-python __main__.py --optimize --n-trials 100 --n-jobs -1
+python __main__.py --optimize --n-trials 10 --n-jobs -1
 ```
 
 Options:
@@ -100,44 +169,91 @@ python __main__.py --experiment-name "my-experiment" --run-name "test-run-1"
 
 ## Command Line Arguments
 
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `--mekfile` | str | From config | Path to Mek file (txt) |
-| `--data` | flag | - | Recompile the datasets |
-| `--epochs` | int | From config | Number of training epochs |
-| `--dropout-rate` | float | From config | Dropout rate |
-| `--hidden-layers` | list of int | From config | Hidden layers configuration |
-| `--batch-size` | int | From config | Batch size for training |
-| `--experiment-name` | str | From config | MLflow experiment name |
-| `--optimize` | flag | - | Run hyperparameter optimization |
-| `--n-trials` | int | 100 | Number of trials for hyperparameter optimization |
-| `--test-size` | float | From config | Percent of dataset to use for testing |
-| `--n-jobs` | int | -1 | Number of parallel jobs for optimization |
-| `--learning-rate` | float | From config | Learning rate for optimization |
-| `--run-name` | str | None | Name of the run |
+The command line arguments are organized into mutually exclusive groups:
+
+### Dataset Handling
+| Argument | Type | Description |
+|----------|------|-------------|
+| `--parse-datasets` | flag | Compile the datasets with pre-tags from the raw game action data |
+| `--extract-features` | flag | Extract features from datasets and create untagged training data |
+| `--test-size` | float | Percent from 0 to 1 of the dataset to use for testing |
+| `--validation-size` | float | Percent from 0 to 1 of the dataset to use for validation |
+| `--oversample` | flag | Oversample the training data to balance the classes (default behavior is to undersample) |
+
+### Test Model
+| Argument | Type | Description |
+|----------|------|-------------|
+| `--s3-model` | str | Path to a trained model stored in S3 to load and test |
+
+### Experiment Configuration
+| Argument | Type | Description |
+|----------|------|-------------|
+| `--experiment-name` | str | MLflow experiment name |
+| `--run-name` | str | Name of the run |
+| `--feature-correlation` | flag | Check feature correlation |
+| `--model-name` | str | Name of the model |
+
+### Training And Model Architecture
+| Argument | Type | Description |
+|----------|------|-------------|
+| `--epochs` | int | Number of training epochs |
+| `--dropout-rate` | float | Dropout rate |
+| `--batch-size` | int | Batch size for training |
+| `--learning-rate` | float | Learning rate for optimization |
+| `--hidden-layers` | list of int | Hidden layers configuration |
+
+### Hyperparameter Search
+| Argument | Type | Description |
+|----------|------|-------------|
+| `--optimize` | flag | Run hyperparameter optimization |
+| `--n-trials` | int | Number of trials for hyperparameter optimization |
+| `--n-jobs` | int | Number of parallel jobs for optimization (-1 uses all cores) |
+
+### Other Arguments
+| Argument | Type | Description |
+|----------|------|-------------|
+| `--mekfile` | str | Path to Mek file (txt) |
+
+**Note**: Arguments within each group are mutually exclusive from arguments in other groups. For example, you cannot use `--extract-features` together with `--optimize`.
+The workflow example section should be updated to match the current command-line arguments and workflow. Here's an updated version:
 
 ## Workflow Example
 
 A typical workflow might look like:
 
-1. Start the MLFlow infrastructure:
+1. Start the MLFlow infrastructure and set up the MinIO bucket:
    ```bash
    docker-compose up -d
    ```
+  Set up the MinIO bucket for MLFlow artifacts:
+   - Access the MinIO web console at http://localhost:9001
+   - Login with the following credentials:
+     - Access Key: mlops-demo
+     - Secret Key: mlops-demo
+   - Select the option "Buckets" under the `Administrator` heading and there you create a bucket named `mlops`
+   - Open it and inside you change its access policy to `Public` so that the MLFlow server can access it.
+   - Now you can access the MLFlow UI at http://localhost:9002 and your experiments are going to correctly be logged.
 
 2. Prepare the datasets:
    ```bash
-   python __main__.py --data
+   # Generate tagged datasets
+   python -m caspar.__main__ --parse-datasets
+
+   # Generate training data (using undersampling by default)
+   python -m caspar.__main__ --extract-features
+
+   # Or use oversampling to balance classes
+   python -m caspar.__main__ --extract-features --oversample
    ```
 
 3. [Optional] Run hyperparameter optimization:
    ```bash
-   python __main__.py --optimize --n-trials 50 --experiment-name "hyperparameter-search"
+   python -m caspar.__main__ --optimize --n-trials 50 --n-jobs -1 --experiment-name "hyperparameter-search"
    ```
 
 4. Train the model with the parameters:
    ```bash
-   python __main__.py --hidden-layers 354 354 --dropout-rate 0.06 --learning-rate 0.01 --epochs 50 --experiment-name final-model --run-name model-v1
+   python -m caspar.__main__ --hidden-layers 1036 1036 130 518 340 130 65 130 --dropout-rate 0.18 --learning-rate 0.016 --epochs 500 --experiment-name final-model --run-name model-v1
    ```
 
 5. View the results in the MLFlow UI:
@@ -145,11 +261,11 @@ A typical workflow might look like:
    http://localhost:9002
    ```
 
-6. Convert the model to TFLite format to deploy on MegaMek:
+6. Test a model stored in S3 (actually it is stored locally in minIO, but anyway): 
    ```bash
-   python __main__.py --convert-model model-v1
+   python -m caspar.__main__ --s3-model s3://mybucket/path/to/model.h5
    ```
-   
+ 
 ## Architecture
 
 The framework consists of several components:

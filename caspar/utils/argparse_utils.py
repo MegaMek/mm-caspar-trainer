@@ -23,5 +23,23 @@
 #
 # Catalyst Game Labs and the Catalyst Game Labs logo are trademarks of
 # InMediaRes Productions, LLC.
-#
-# Chassis	Model	BV	TotalArmor	TotalInternal	ECM	maxRange	totalDamage	unitRole
+
+class ExclusiveArgumentGroup:
+    def __init__(self, parser, name, description=None):
+        self.name = name
+        self.args = []
+        self.group = parser.add_argument_group(name, description=description)
+
+    def add_mutually_exclusive_group(self, *args, **kwargs):
+        arg = self.group.add_mutually_exclusive_group(*args, **kwargs)
+        return arg
+
+    def add_argument(self, *args, **kwargs):
+        arg = self.group.add_argument(*args, **kwargs)
+        dest = kwargs.get('dest')
+        if not dest:
+            for arg_str in args:
+                if arg_str.startswith('--'):
+                    dest = arg_str.lstrip('-').replace('-', '_')
+                    break
+        self.args.append(dest)
