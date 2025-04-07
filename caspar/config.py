@@ -23,32 +23,38 @@
 #
 # Catalyst Game Labs and the Catalyst Game Labs logo are trademarks of
 # InMediaRes Productions, LLC.
+
 import os
 
 # Data settings
 RESOURCES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources")
 DATASETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "datasets")
+DATASETS_UNTAGGED_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "datasets_untagged")
+DATASETS_TAGGED_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "datasets_tagged")
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 CHECKPOINT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "checkpoints")
-MEK_FILE = os.path.join(RESOURCES_DIR, "meks.txt")
+MEK_FILE = os.path.join(RESOURCES_DIR, "meks.tsv")
 DOTENV_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 
 # Model settings
 MODEL_CONFIG = {
-    "hidden_layers": [354, 354, 354, 354],
-    "dropout_rate": 0.06,
-    "learning_rate": 0.01
+    "hidden_layers": [1036, 1036, 130, 518, 340, 130, 65, 130],
+    "dropout_rate": 0.18344289381176082,
+    "learning_rate": 0.016544355731452045
 }
 
 # Training settings
 TRAINING_CONFIG = {
     "test_size": 0.1,
-    "epochs": 100,
-    "batch_size": 34,
+    "validation_size": 0.1,
+    "epochs": 500,
+    "batch_size": 128,
 }
 
 # MlFlow settings
 MLFLOW_CONFIG = {
     "tracking_uri": os.environ.get("MLFLOW_TRACKING_URI", None),
-    "experiment_name": "00-ffnn"
+    "experiment_name": "01-classifier-ffnn",
+    "run_name": None,
+    "model_name": "CASPAR",
 }
