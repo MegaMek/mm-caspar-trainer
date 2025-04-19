@@ -292,11 +292,49 @@ def make_old_test_train_val_data():
     processor = TrainingDatasetProcessor(x, y, 0.1, 0.1, 7077)
     processor.split_and_save()
 
+def calculate_quality(unit_actions, game_states, game_boards):
+    """
+    Quality is calculated as the ratio of human players to bot players
+    in the game. The higher the ratio, the better the quality.
+    """
+
+    human_players = set(
+        action['player_id'] for action in unit_actions
+        if action.get('is_bot') == 0
+    )
+
+    unique_units = {}
+    for game_states_array in game_states:
+        for game_state in game_states_array:
+            unit_key = str(game_state.get('entity_id'))
+            if unit_key not in unique_units:
+                unique_units[unit_key] = {
+                    'isBot': game_state.get('player_id') not in human_players,
+                    'bv': game_state.get('bv', 0)
+                }
+
+    human_bv = 0
+    bot_bv = 0
+
+    for unit in unique_units.values():
+        if unit['isBot']:
+            bot_bv += unit['bv']
+        else:
+            human_bv += unit['bv']
+
+    # Mark datasets with low human player presence as lower quality
+    adjusted_bot_bv = bot_bv * 4
+    if adjusted_bot_bv == 0:
+        return 100
+
+    return min((human_bv / adjusted_bot_bv * 100), 50)
+
 
 def make_tagged_datasets():
     unit_actions_tuple, game_states_tuple, game_boards_tuple = load_datasets()
     for i in range(len(unit_actions_tuple)):
-        with open(os.path.join(DATASETS_TAGGED_DIR, f'dataset_{i}_{len(unit_actions_tuple[i][1])}_actions.json'), 'w') as f:
+        quality = int(calculate_quality(unit_actions_tuple[i][1], game_states_tuple[i][1], game_boards_tuple[i][1]))
+        with open(os.path.join(DATASETS_TAGGED_DIR, f'tagged_dataset-quality={quality:03d}-actions={len(unit_actions_tuple[i][1])}-id={i}.json'), 'w') as f:
             json.dump({
                 "unitActions": unit_actions_tuple[i][1],
                 "gameStates": game_states_tuple[i][1],

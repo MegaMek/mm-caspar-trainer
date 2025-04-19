@@ -30,7 +30,7 @@ import math
 from typing import Tuple, List, Dict, Union
 from enum import Enum
 import re
-
+import random
 import numpy as np
 
 from caspar.config import DATA_DIR, DATASETS_DIR, MEK_FILE, DATASETS_TAGGED_DIR
@@ -67,6 +67,57 @@ class ActionAndState:
         return [builder.build() for builder in self.state_builders]
 
 
+class LoadUnitState:
+
+    def filter_unit_states(self, action: Dict, unit_states: List[Dict]) -> List[Dict]:
+        """
+        Returns the unit states
+        """
+        return unit_states
+
+
+class LoadUnitStateDoubleBlind(LoadUnitState):
+
+    def filter_unit_states(self, action: Dict, unit_states: List[Dict]) -> List[Dict]:
+        """
+        Returns the unit states
+        """
+        return self.double_blind(action, unit_states)
+
+    @classmethod
+    def double_blind(cls, action: Dict, states: List[Dict]) -> List[Dict]:
+        """
+        Applies double-blind to the action and states.
+
+        Args:
+            action: The action dictionary
+            states: The list of state builders
+
+        Returns:
+            List of delayed unit state builders
+        """
+        team_id = action['team_id']
+        bracket = [(3, 4), (5, 6), (0, 8), (9, 16), (17, 24), (1, 16), (17, 32), (33, 48)]
+        team_positions = [(state['x'], state['y'], [(0, 3)] + random.sample(bracket, 3)) for state in states if state['team_id'] == team_id]
+        team_positions.append((action['from_x'], action['from_y'], random.sample(bracket, 1)))
+        # max visual range = 60
+        ret_states = []
+        for state in states:
+            if state['team_id'] != team_id:
+                can_be_seen = False
+
+                for pos in team_positions:
+                    distance = math.sqrt((state['x'] - pos[0]) ** 2 + (state['y'] - pos[1]) ** 2)
+                    dov = random.sample(pos[2], 1)[0]
+
+                    if distance < 3 or dov[0] <= distance <= dov[1]:
+                        can_be_seen = True
+                        break
+
+                if can_be_seen:
+                    ret_states.append(state)
+
+        return states
 
 class DataLoader:
     """
@@ -209,7 +260,7 @@ class DataLoader:
             return pattern.match(line) is not None
         return line.startswith(pattern)
 
-    def get_actions_and_states(self, as_dict: bool = True) -> Tuple[List[Dict], List[List[Dict]], Union[GameBoardRepr, Dict]]:
+    def get_actions_and_states(self, load_unit_state: LoadUnitState, as_dict: bool = True) -> Tuple[List[Dict], List[List[Dict]], Union[GameBoardRepr, Dict]]:
         """
         Returns the parsed actions and states in a format similar to the load_data method.
 
@@ -221,7 +272,8 @@ class DataLoader:
         game_board = self.game_board.to_dict() if as_dict else self.game_board
         for action_and_state in self._action_and_states:
             unit_actions.append(action_and_state.action)
-            game_states.append(action_and_state.states)
+            unit_states = load_unit_state.filter_unit_states(action_and_state.action, action_and_state.states)
+            game_states.append(unit_states)
 
         return unit_actions, game_states, game_board
 
@@ -368,8 +420,7 @@ class DelayedUnitStateBuilder:
         }
 
 
-
-def load_datasets():
+def load_datasets(double_blind: bool = False):
     game_states = []
     unit_actions = []
     game_boards = []
@@ -379,7 +430,12 @@ def load_datasets():
         for file in files:
             file_path = os.path.join(root, file)
             try:
-                loaded_unit_actions, loaded_game_states, loaded_game_board = data_loader.parse(file_path).get_actions_and_states()
+                data_loader.parse(str(file_path))
+                if double_blind:
+                    loaded_unit_actions, loaded_game_states, loaded_game_board = data_loader.get_actions_and_states_double_blind()
+                else:
+                    loaded_unit_actions, loaded_game_states, loaded_game_board = data_loader.get_actions_and_states()
+
                 if len(loaded_game_states) == 0:
                     continue
                 unit_actions.append((i, loaded_unit_actions))
@@ -394,13 +450,20 @@ def load_datasets():
     return unit_actions, game_states, game_boards
 
 
-
 def load_tagged_datasets_classifier():
     game_states = []
     unit_actions = []
     game_boards = []
     tags = []
     i = 0
+    stats = {
+        "total_actions": 0,
+        "total_actions_100q": 0,
+        "average_actions": 0,
+        "average_quality": 0,
+        "weighted_average_quality": 0.0
+    }
+
     for root, _, files in os.walk(DATASETS_TAGGED_DIR):
         for file in files:
             file_path = os.path.join(root, file)
@@ -408,6 +471,14 @@ def load_tagged_datasets_classifier():
                 with (open(file_path, "r") as f):
                     value = json.load(f)
 
+                _, quality_part, actions_part, _ = file.split("-")
+                quality_value = int(quality_part.split("=")[-1])
+                actions_value = int(actions_part.split("=")[-1])
+                stats["total_actions"] += actions_value
+                stats["average_actions"] += actions_value
+                stats["average_quality"] += quality_value
+                stats["weighted_average_quality"] += quality_value * actions_value
+                stats["total_actions_100q"] += actions_value if quality_value == 100 else 0
                 unit_actions.append((i, value["unitActions"]))
                 game_states.append((i, value["gameStates"]))
                 game_boards.append((i, value["gameBoard"]))
@@ -418,9 +489,11 @@ def load_tagged_datasets_classifier():
                 logger.error("Error when reading thing", e)
                 print(f"Failed to load {file_path}: {str(e)}")
 
+    stats["average_actions"] = stats["average_actions"] / i
+    stats["average_quality"] = stats["average_quality"] / i
+    stats["weighted_average_quality"] = stats["weighted_average_quality"] / stats["total_actions"]
+    print(stats)
     return unit_actions, game_states, game_boards, tags
-
-
 
 
 def load_data_as_numpy_arrays():
