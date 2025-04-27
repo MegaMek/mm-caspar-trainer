@@ -35,7 +35,7 @@ class ExclusiveArgumentGroup:
         return arg
 
     def add_argument(self, *args, **kwargs):
-        arg = self.group.add_argument(*args, **kwargs)
+        self.group.add_argument(*args, **kwargs)
         dest = kwargs.get('dest')
         if not dest:
             for arg_str in args:

@@ -26,27 +26,28 @@
 import argparse
 import json
 import os
-import pickle
-
-from dotenv import load_dotenv
-import tensorflow as tf
-import numpy as np
 import tempfile
+from typing import List
 
 import boto3
+import numpy as np
+import tensorflow as tf
+from dotenv import load_dotenv
+from tqdm import tqdm
 
-from caspar.data.data_loader import load_datasets, load_data_as_numpy_arrays, load_tagged_datasets_classifier
-from caspar.data import FeatureExtractor
-from caspar.data.feature_extractor import ClassifierFeatureExtractor
-from caspar.model.model import CasparClassificationModel
-from caspar.training.trainer import ClassificationModelTrainer
-from caspar.utils.mlflow_utils import setup_mlflow
 from caspar.config import DATASETS_DIR, MEK_FILE, MODEL_CONFIG, TRAINING_CONFIG, MLFLOW_CONFIG, DOTENV_PATH, DATA_DIR, \
     DATASETS_TAGGED_DIR
-from caspar.data.training_dataset_processor import TrainingDatasetProcessor, ClassificationTrainingDatasetProcessor
+from caspar.data.data_loader import load_datasets, load_data_as_numpy_arrays, load_tagged_datasets_classifier, \
+    DataLoader, load_dataset_from_file
+from caspar.data.feature_extractor import ClassifierFeatureExtractor
 from caspar.data.tagger import tag_action
+from caspar.data.training_dataset_processor import ClassificationTrainingDatasetProcessor
 from caspar.hyperparameter_search import optimize_architecture
+from caspar.model.model import CasparClassificationModel
+from caspar.training.trainer import ClassificationModelTrainer
 from caspar.utils.argparse_utils import ExclusiveArgumentGroup
+from caspar.utils.mlflow_utils import setup_mlflow
+
 load_dotenv(DOTENV_PATH)
 
 
@@ -54,29 +55,29 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Train CASPAR neural network model')
     parser.add_argument('--mekfile', type=str, default=MEK_FILE,
                         help='Path to Mek file (txt)')
-    groups = []
+    groups: List[ExclusiveArgumentGroup] = []
     ###########
 
-
     dataset_group = ExclusiveArgumentGroup(parser, "Dataset Handling")
+    dataset_group.add_argument('--name-datasets', action='store_true',
+                               help='Rename the datasets in the datasets directory')
     dataset_group.add_argument('--parse-datasets', action='store_true',
-                        help='Compile the datasets with pre-tags from the raw game action data')
+                               help='Compile the datasets with pre-tags from the raw game action data')
     dataset_group.add_argument('--test-size', type=float,
-                                help='Percent from 0 to 1 of the dataset to use for testing')
+                               help='Percent from 0 to 1 of the dataset to use for testing')
     dataset_group.add_argument('--validation-size', type=float,
                                help='Percent from 0 to 1 of the dataset to use for validation')
     dataset_group.add_argument('--oversample', action='store_true',
                                help='Oversample the training data to balance the classes, default behavior is to undersample')
     feature_extraction_group = dataset_group.add_mutually_exclusive_group(required=False)
     feature_extraction_group.add_argument('--extract-features', action='store_true',
-                        help='Extract features from datasets and create untagged training data')
+                                          help='Extract features from datasets and create untagged training data')
     groups.append(dataset_group)
     ###########
 
     test_model_group = ExclusiveArgumentGroup(
         parser, "Test Model", "Load a model and test it against the test and validation datasets")
     test_model_group.add_argument('--s3-model', type=str, help='Path to trained model')
-
     groups.append(test_model_group)
     ###########
 
@@ -92,6 +93,7 @@ def parse_args():
     experiment_group.add_argument('--model-name', type=str,
                                   help='Name of the model')
     ###########
+
     training_group = ExclusiveArgumentGroup(parser, "Training And Model Architecture")
     training_group.add_argument('--epochs', type=int,
                         help='Number of training epochs')
@@ -104,8 +106,8 @@ def parse_args():
     training_group.add_argument('--hidden-layers', nargs='+', type=int,
                             help='Hidden layers formats')
     groups.append(training_group)
-
     ###########
+
     hyperparameter_group = ExclusiveArgumentGroup(parser, "Hyperparameter Search")
     hyperparameter_group.add_argument('--optimize', action='store_true',
                                 help='Run hyperparameter optimization')
@@ -131,6 +133,10 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    if args.name_datasets:
+        name_datasets()
+        return
 
     if args.model_name:
         MLFLOW_CONFIG['model_name'] = args.model_name
@@ -164,7 +170,7 @@ def main():
 
     if args.parse_datasets:
         make_tagged_datasets()
-        print("Finished compiling datasets")
+        print("Finished compiling datasets into data")
         return
 
     if args.extract_features:
@@ -277,22 +283,39 @@ def load_model_from_s3(address):
         return tf.keras.models.load_model(temp_path)
 
 
-def make_old_test_train_val_data():
-    # Load data
-    print(f"Loading data from {DATASETS_DIR}...")
+def count_players(unit_states):
+    players = set()
+    for unit_state in unit_states:
+        if unit_state.get('player_id') is not None:
+            players.add(unit_state['player_id'])
+    return len(players)
 
-    unit_actions, game_states, game_boards = load_datasets()
 
-    print(f"Loaded {len(unit_actions)} unit actions and {len(game_states)} game states")
+def count_units(unit_states):
+    units = set()
+    for unit_state in unit_states:
+        if unit_state.get('entity_id') is not None:
+            units.add(unit_state['entity_id'])
+    return len(units)
 
-    # Extract features
-    print("Extracting features...")
-    feature_extractor = FeatureExtractor()
-    x, y = feature_extractor.extract_features(unit_actions, game_states, game_boards)
-    processor = TrainingDatasetProcessor(x, y, 0.1, 0.1, 7077)
-    processor.split_and_save()
 
-def calculate_quality(unit_actions, game_states, game_boards):
+def count_bv(unit_states):
+    bv = set()
+    for unit_state in unit_states:
+        if unit_state.get('bv') is not None:
+            bv.add(unit_state['bv'])
+    return sum(bv)
+
+
+def count_bot_players(unit_actions):
+    bot_players = set(
+        action['player_id'] for action in unit_actions
+        if action.get('is_bot') == 1
+    )
+
+    return len(bot_players)
+
+def calculate_quality(unit_actions, game_states, game_board):
     """
     Quality is calculated as the ratio of human players to bot players
     in the game. The higher the ratio, the better the quality.
@@ -327,40 +350,81 @@ def calculate_quality(unit_actions, game_states, game_boards):
     if adjusted_bot_bv == 0:
         return 100
 
-    return min((human_bv / adjusted_bot_bv * 100), 50)
+    return min((human_bv / adjusted_bot_bv * 100), 99)
 
 
 def make_tagged_datasets():
-    unit_actions_tuple, game_states_tuple, game_boards_tuple = load_datasets()
-    for i in range(len(unit_actions_tuple)):
-        quality = int(calculate_quality(unit_actions_tuple[i][1], game_states_tuple[i][1], game_boards_tuple[i][1]))
-        with open(os.path.join(DATASETS_TAGGED_DIR, f'tagged_dataset-quality={quality:03d}-actions={len(unit_actions_tuple[i][1])}-id={i}.json'), 'w') as f:
-            json.dump({
-                "unitActions": unit_actions_tuple[i][1],
-                "gameStates": game_states_tuple[i][1],
-                "gameBoard": game_boards_tuple[i][1],
-                "tags": tag_action(unit_actions_tuple[i][1], game_states_tuple[i][1], game_boards_tuple[i][1]),
-                "notes": ""
-                },
-            f)
+    unit_actions_tuple, game_states_tuple, game_boards_tuple, file_names = load_datasets(double_blind=False)
+    tag_and_persist_dataset(game_boards_tuple, game_states_tuple, unit_actions_tuple, file_names)
+
+    offset = len(unit_actions_tuple)
+    unit_actions_tuple, game_states_tuple, game_boards_tuple, file_names = load_datasets(double_blind=True)
+    tag_and_persist_dataset(game_boards_tuple, game_states_tuple, unit_actions_tuple, file_names, offset=offset)
+
+
+def tag_and_persist_dataset(game_boards_tuple, game_states_tuple, unit_actions_tuple, file_names, offset = 0):
+    with tqdm(total=len(unit_actions_tuple), desc="Tagging datasets") as t:
+        for i in range(len(unit_actions_tuple)):
+            file_path = file_names[i]
+            unit_states = [unit_state for unit_state in game_states_tuple[i][1]]
+
+            players = count_players(unit_states)
+            bots = count_bot_players(unit_states)
+            units = count_units(unit_states)
+            bv = count_bv(unit_states)
+            quality = int(calculate_quality(unit_actions_tuple[i][1], game_states_tuple[i][1], game_boards_tuple[i][1]))
+            
+            name = create_file(bv, file_path, players, quality, unit_actions_tuple[i][1], units,
+                               prefix="tagged dataset", extension="json", postfix=f" id={i + offset}")
+
+            file = os.path.join(
+                DATASETS_TAGGED_DIR,
+                name
+            )
+
+            filepath = os.path.join(DATASETS_TAGGED_DIR, file)
+            desc_text = filepath[-60:] + " " * (60 - len(filepath[-60:]))
+
+            t.set_description("Tagging: " + desc_text)
+            t.update()
+
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "unitActions": unit_actions_tuple[i][1],
+                    "gameStates": game_states_tuple[i][1],
+                    "gameBoard": game_boards_tuple[i][1],
+                    "tags": tag_action(unit_actions_tuple[i][1], game_states_tuple[i][1], game_boards_tuple[i][1]),
+                    "notes": "original file name: " + file_path,
+                    "properties": {
+                        "id": i+offset,
+                        "quality": quality,
+                        "players": players,
+                        "bots": bots,
+                        "human_players": players - bots,
+                        "board_size": game_boards_tuple[i][1],
+                        "units": units,
+                        "bv": bv,
+                    },
+                }, f)
+
+
+def create_file(bv, file_path, players, quality, unit_actions, units, prefix, extension, postfix: str = ""):
+    date_time = read_first_line(file_path).split(" ")[-1].strip().replace(":", "-")
+    _date, _time = date_time.split("T")
+    millis = _time.split(".")[1]
+    _time = _time.split(".")[0] + "_" + millis[:4]
+    return f"{prefix} q={quality:03d} a={len(unit_actions):04d} p={players:02d} u={units:03d} bv={bv:06d} d={_date} t={_time} {postfix}.{extension}"
 
 
 def make_test_train_val_data_classifier(oversample: bool):
-    # Load data
-    print(f"Loading data from {DATASETS_DIR}...")
     unit_actions, game_states, game_boards, tags = load_tagged_datasets_classifier()
-
-    print(f"Loaded {len(unit_actions)} unit actions and {len(game_states)} game states")
-
-    # Extract features and classify movements
-    print("Extracting features and classifying movements...")
     feature_extractor = ClassifierFeatureExtractor()
 
     x_acc = []
     y_acc = []
 
     for i in range(len(unit_actions)):
-        x, y = feature_extractor.extract_classification_features(unit_actions[i][1], game_states[i][1], game_boards[i][1], tags[i][1], i)
+        x, y = feature_extractor.extract_classification_features(unit_actions[i][1], game_states[i][1], game_boards[i][1], tags[i][1])
         x_acc.append(x)
         y_acc.append(y)
 
@@ -393,14 +457,37 @@ def make_test_train_val_data_classifier(oversample: bool):
     print(f"Test data shape: {dataset_info['x_test_shape']}")
 
 
-def test():
-    x_train, x_val, x_test, y_train, y_val, y_test = load_data_as_numpy_arrays()
+def name_datasets():
+    data_loader = DataLoader(MEK_FILE)
+    for root, _, files in os.walk(DATASETS_DIR):
+        filtered_files = [file for file in files if file.endswith(".tsv")]
+        with tqdm(total=len(filtered_files), desc="Renaming dataset: ") as t:
+            for file in filtered_files:
+                file_path = os.path.join(root, file)
+                loaded_unit_actions, loaded_game_states, loaded_game_board = load_dataset_from_file(data_loader, file_path)
+                if not loaded_unit_actions:
+                    os.remove(file_path)
+                    continue
 
-    with open('../checkpoints/single_input.txt', 'w') as f:
-        f.write("private static final double[] x_test = new double[]{" + ", ".join(map(str, x_train[0])) + "};\n")
-        f.write("private static final double y_test = " + str(y_train[0]) + ";\n")
+                desc_text = file_path[-60:] + " " * (60 - len(file_path[-60:]))
+                t.set_description("Renaming dataset: " + desc_text)
+                t.update()
+
+                unit_states = [unit_state for unit_state in loaded_game_states[0]]
+
+                players = count_players(unit_states)
+                units = count_units(unit_states)
+                bv = count_bv(unit_states)
+                quality = int(calculate_quality(loaded_unit_actions, loaded_game_states, loaded_game_board))
+
+                new_name = create_file(bv, file_path, players, quality, loaded_unit_actions, units, prefix="dataset",
+                                       extension="tsv")
+                os.rename(file_path, new_name)
 
 
+def read_first_line(file_path):
+    with open(file_path, "r") as f:
+        return f.readline()
 
 if __name__ == "__main__":
     main()

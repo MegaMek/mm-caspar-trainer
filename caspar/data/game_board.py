@@ -25,7 +25,7 @@
 # InMediaRes Productions, LLC.
 
 import re
-from typing import Optional
+from typing import Optional, List
 
 
 class Hex:
@@ -160,17 +160,15 @@ class Hex:
 class GameBoardRepr:
     """Represents the game board with dimensions and hexes."""
 
-    def __init__(self, data: str):
+    def __init__(self, data: List[str]):
         """Initialize the game board from the parsed data."""
         self.width = 0
         self.height = 0
         self.hexes = []
         self._parse(data)
 
-    def _parse(self, data: str):
+    def _parse(self, lines: List[str]):
         """Parse the game board data."""
-        lines = data.strip().split('\n')
-
         # Find and parse board dimensions
         for i, line in enumerate(lines):
             if line.startswith("BOARD_NAME"):

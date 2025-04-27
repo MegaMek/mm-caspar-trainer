@@ -23,7 +23,7 @@
 #
 # Catalyst Game Labs and the Catalyst Game Labs logo are trademarks of
 # InMediaRes Productions, LLC.
-from typing import List, Dict, Tuple, Union
+from typing import List, Dict, Tuple, Union, Optional
 import csv
 import os
 
@@ -39,7 +39,7 @@ from caspar.config import DATA_DIR
 
 
 def clamp01(value: float) -> float:
-    return max(min(value, 1), 0)
+    return max(min(value, 1.0), 0.0)
 
 
 class FeatureExtractor:
@@ -151,8 +151,7 @@ class FeatureExtractor:
         'GunEmplacement', 'BattleArmor'}
 
     def extract_features(
-            self, unit_actions: List[Dict], game_states: List[List[Dict]], game_board: Union[GameBoardRepr, Dict],
-            iteration = 0
+            self, unit_actions: List[Dict], game_states: List[List[Dict]], game_board: Union[GameBoardRepr, Dict]
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Extract features from unit actions and game states.
@@ -168,108 +167,114 @@ class FeatureExtractor:
         """
         if len(unit_actions) != len(game_states):
             raise ValueError("Number of unit actions must match number of game states")
+
         size = len(unit_actions)
         x = np.zeros((size, self.num_features))
         y = np.zeros(size)
-        for i, (action, state) in enumerate(tqdm(zip(unit_actions, game_states))):
-            if not self.filter_actions(action):
-                continue
 
-            if i >= len(x):
-                break
-            state = {unit["entity_id"]: unit for unit in state}
+        with tqdm(total=size, desc="Extracting features") as t:
+            for i, (action, state) in enumerate(zip(unit_actions, game_states)):
+                t.update()
 
-            environmental_hazards = self._calculate_environmental_hazards(action, game_board)
+                if not self.filter_actions(action):
+                    continue
 
-            # Basic features directly from unit action
-            x[i, self.features["mp_percentage"]] = action.get("mp_p", 0)
-            x[i, self.features["heat_percentage"]] = action.get("heat_p", 0)
-            x[i, self.features["armor_percentage"]] = action.get("armor_p", 0)
-            x[i, self.features["internal_percentage"]] = action.get("internal_p", 0)
-            x[i, self.features["jumping"]] = action.get("jumping", 0)
-            x[i, self.features["distance_traveled"]] = self._distance_action(action)
-            x[i, self.features["hexes_moved"]] =action.get("hexes_moved", 0)
-            x[i, self.features["chance_of_failure"]] = environmental_hazards * action.get("mp_p", 0)
-            x[i, self.features["max_range"]] = action.get("max_range", 0.0)
-            x[i, self.features["total_damage"]] = action.get("total_damage", 0.0)
+                if i >= len(x):
+                    break
 
-            x[i, self.features["is_facing_enemy"]] = self._calculate_facing_enemy(action, state)
-            x[i, self.features["enemy_in_range"]] = self._calculate_enemy_in_range(action, state)
-            # x[i, self.features["cover_value"]] = self._calculate_cover(action, state)
-            x[i, self.features["allies_nearby"]] = self._calculate_allies_nearby(action, state)
-            x[i, self.features["enemies_nearby"]] = self._calculate_enemies_nearby(action, state)
-            x[i, self.features["unit_health_average"]] = self._calculate_unit_health_average(action)
+                state = {unit["entity_id"]: unit for unit in state}
 
-            health = self._arc_armor_damage(action)
-            x[i, self.features["unit_health_front"]] = health[0]
-            x[i, self.features["unit_health_right"]] = health[2]
-            x[i, self.features["unit_health_left"]] = health[4]
-            x[i, self.features["unit_health_back"]] = health[3]
+                environmental_hazards = self._calculate_environmental_hazards(action, game_board)
 
-            x[i, self.features["damage_ratio"]] = self._calculate_damage_ratio(action, state)
-            x[i, self.features["ecm_coverage"]] = self._calculate_ecm_coverage(action, state)
-            x[i, self.features["enemy_ecm_coverage"]] = self._calculate_enemy_ecm_coverage(action, state)
+                # Basic features directly from unit action
+                x[i, self.features["mp_percentage"]] = action.get("mp_p", 0)
+                x[i, self.features["heat_percentage"]] = action.get("heat_p", 0)
+                x[i, self.features["armor_percentage"]] = action.get("armor_p", 0)
+                x[i, self.features["internal_percentage"]] = action.get("internal_p", 0)
+                x[i, self.features["jumping"]] = action.get("jumping", 0)
+                x[i, self.features["distance_traveled"]] = self._distance_action(action)
+                x[i, self.features["hexes_moved"]] =action.get("hexes_moved", 0)
+                x[i, self.features["chance_of_failure"]] = environmental_hazards * action.get("mp_p", 0)
+                x[i, self.features["max_range"]] = action.get("max_range", 0.0)
+                x[i, self.features["total_damage"]] = action.get("total_damage", 0.0)
 
-            cover_features = self._calculate_environmental_cover(action, state, game_board)
-            x[i, self.features["environmental_cover"]] = cover_features["total_cover"]
+                x[i, self.features["is_facing_enemy"]] = self._calculate_facing_enemy(action, state)
+                x[i, self.features["enemy_in_range"]] = self._calculate_enemy_in_range(action, state)
+                # x[i, self.features["cover_value"]] = self._calculate_cover(action, state)
+                x[i, self.features["allies_nearby"]] = self._calculate_allies_nearby(action, state)
+                x[i, self.features["enemies_nearby"]] = self._calculate_enemies_nearby(action, state)
+                x[i, self.features["unit_health_average"]] = self._calculate_unit_health_average(action)
 
-            x[i, self.features["environmental_hazards"]] = environmental_hazards
+                health = self._arc_armor_damage(action)
+                x[i, self.features["unit_health_front"]] = health[0]
+                x[i, self.features["unit_health_right"]] = health[2]
+                x[i, self.features["unit_health_left"]] = health[4]
+                x[i, self.features["unit_health_back"]] = health[3]
 
-            x[i, self.features["favorite_target_in_range"]] = self._calculate_favorite_target_in_range(action, state)
-            x[i, self.features["flanking_position"]] = self._calculate_flanking_position(action, state)
-            x[i, self.features["formation_cohesion"]] = self._calculate_formation_cohesion(action, state)
-            x[i, self.features["formation_separation"]] = self._calculate_formation_separation(action, state)
-            x[i, self.features["formation_alignment"]] = self._calculate_formation_alignment(action, state)
-            x[i, self.features["friendly_artillery_fire"]] = self._calculate_friendly_artillery_fire(action, state)
-            x[i, self.features["covering_units"]] = self._calculate_covering_units(action, state)
-            # x[i, self.features["heat_management"]] = self._calculate_heat_management(action, state)
-            x[i, self.features["enemy_vip_distance"]] = self._calculate_enemy_vip_distance(action, state)
-            x[i, self.features["is_crippled"]] = self._calculate_is_crippled(action, state)
-            x[i, self.features["moving_toward_waypoint"]] = self._calculate_moving_toward_waypoint(action, state)
-            x[i, self.features["unit_role"]] = self._calculate_unit_role(action, state)
-            x[i, self.features["threat_by_sniper"]] = self._calculate_threat_by_sniper(action, state)
-            x[i, self.features["threat_by_missile_boat"]] = self._calculate_threat_by_missile_boat(action, state)
-            x[i, self.features["threat_by_juggernaut"]] = self._calculate_threat_by_juggernaut(action, state)
-            x[i, self.features["unit_tmm"]] = self._calculate_unit_tmm(action)
-            x[i, self.features["piloting_caution"]] = self._calculate_piloting_caution(action)
-            x[i, self.features["retreat"]] = self._calculate_retreat(action, state)
-            x[i, self.features["scouting"]] = self._calculate_scouting(action, state)
-            x[i, self.features["standing_still"]] = self._calculate_standing_still(action)
-            x[i, self.features["strategic_goal"]] = self._calculate_strategic_goal(action, state)
-            x[i, self.features["target_health"]] = self._calculate_target_health(action, state)
-            x[i, self.features["target_within_optimal_range"]] = self._calculate_target_within_optimal_range(action, state)
-            x[i, self.features["turns_to_encounter"]] = self._calculate_turns_to_encounter(action, state)
+                x[i, self.features["damage_ratio"]] = self._calculate_damage_ratio(action, state)
+                x[i, self.features["ecm_coverage"]] = self._calculate_ecm_coverage(action, state)
+                x[i, self.features["enemy_ecm_coverage"]] = self._calculate_enemy_ecm_coverage(action, state)
 
-            for n, value in enumerate(self._hot_encode_unit_role(action)):
-                x[i, self.features["unit_role_" + str(n)]] = value
+                cover_features = self._calculate_environmental_cover(action, state, game_board)
+                x[i, self.features["environmental_cover"]] = cover_features["total_cover"]
 
-            # for n, value in enumerate(self._n_threat(action, state, self.ENEMIES_N)):
-            #     x[i, self.features["closest_enemy_" + str(n)]] = value
-            #
-            # for n, value in enumerate(self._n_threat_allies(action, state, self.ALLIES_N)):
-            #     x[i, self.features["closest_friend_" + str(n)]] = value
+                x[i, self.features["environmental_hazards"]] = environmental_hazards
 
-            # x[i, self.features["self_threat_level"]] = self._self_threat(action, state)
+                x[i, self.features["favorite_target_in_range"]] = self._calculate_favorite_target_in_range(action, state)
+                x[i, self.features["flanking_position"]] = self._calculate_flanking_position(action, state)
+                x[i, self.features["formation_cohesion"]] = self._calculate_formation_cohesion(action, state)
+                x[i, self.features["formation_separation"]] = self._calculate_formation_separation(action, state)
+                x[i, self.features["formation_alignment"]] = self._calculate_formation_alignment(action, state)
+                x[i, self.features["friendly_artillery_fire"]] = self._calculate_friendly_artillery_fire(action, state)
+                x[i, self.features["covering_units"]] = self._calculate_covering_units(action, state)
+                # x[i, self.features["heat_management"]] = self._calculate_heat_management(action, state)
+                x[i, self.features["enemy_vip_distance"]] = self._calculate_enemy_vip_distance(action, state)
+                x[i, self.features["is_crippled"]] = self._calculate_is_crippled(action, state)
+                x[i, self.features["moving_toward_waypoint"]] = self._calculate_moving_toward_waypoint(action, state)
+                x[i, self.features["unit_role"]] = self._calculate_unit_role(action, state)
+                x[i, self.features["threat_by_sniper"]] = self._calculate_threat_by_sniper(action, state)
+                x[i, self.features["threat_by_missile_boat"]] = self._calculate_threat_by_missile_boat(action, state)
+                x[i, self.features["threat_by_juggernaut"]] = self._calculate_threat_by_juggernaut(action, state)
+                x[i, self.features["unit_tmm"]] = self._calculate_unit_tmm(action)
+                x[i, self.features["piloting_caution"]] = self._calculate_piloting_caution(action)
+                x[i, self.features["retreat"]] = self._calculate_retreat(action, state)
+                x[i, self.features["scouting"]] = self._calculate_scouting(action, state)
+                x[i, self.features["standing_still"]] = self._calculate_standing_still(action)
+                x[i, self.features["strategic_goal"]] = self._calculate_strategic_goal(action, state)
+                x[i, self.features["target_health"]] = self._calculate_target_health(action, state)
+                x[i, self.features["target_within_optimal_range"]] = self._calculate_target_within_optimal_range(action, state)
+                x[i, self.features["turns_to_encounter"]] = self._calculate_turns_to_encounter(action, state)
 
-            # enemy_threat_heatmap = self._calculate_enemy_threat_heatmap(action, state)
-            # friendly_threat_heatmap = self._calculate_friendly_threat_heatmap(action, state)
+                for n, value in enumerate(self._hot_encode_unit_role(action)):
+                    x[i, self.features["unit_role_" + str(n)]] = value
 
-            # for n in range(100):
-            #     x[i, self.features["enemy_threat_heatmap_" + str(n)]] = enemy_threat_heatmap[n]
-            # for n in range(100):
-            #     x[i, self.features["friendly_threat_heatmap_" + str(n)]] = friendly_threat_heatmap[n]
+                # for n, value in enumerate(self._n_threat(action, state, self.ENEMIES_N)):
+                #     x[i, self.features["closest_enemy_" + str(n)]] = value
+                #
+                # for n, value in enumerate(self._n_threat_allies(action, state, self.ALLIES_N)):
+                #     x[i, self.features["closest_friend_" + str(n)]] = value
 
-            # Calculate and add radar features
-            # radar = self._calculate_unit_radar_features(action, state)
-            # for y_idx in range(self.RADAR_GRID_SIZE):
-            #     for x_idx in range(self.RADAR_GRID_SIZE):
-            #         feature_name = f"radar_{y_idx}_{x_idx}"
-            #         feature_idx = self.features[feature_name]
-            #         x[i, feature_idx] = radar[y_idx, x_idx]
+                # x[i, self.features["self_threat_level"]] = self._self_threat(action, state)
 
-            reward = self.reward_calculator(action, state, game_states[i:])
+                # enemy_threat_heatmap = self._calculate_enemy_threat_heatmap(action, state)
+                # friendly_threat_heatmap = self._calculate_friendly_threat_heatmap(action, state)
 
-            y[i] = reward
+                # for n in range(100):
+                #     x[i, self.features["enemy_threat_heatmap_" + str(n)]] = enemy_threat_heatmap[n]
+                # for n in range(100):
+                #     x[i, self.features["friendly_threat_heatmap_" + str(n)]] = friendly_threat_heatmap[n]
+
+                # Calculate and add radar features
+                # radar = self._calculate_unit_radar_features(action, state)
+                # for y_idx in range(self.RADAR_GRID_SIZE):
+                #     for x_idx in range(self.RADAR_GRID_SIZE):
+                #         feature_name = f"radar_{y_idx}_{x_idx}"
+                #         feature_idx = self.features[feature_name]
+                #         x[i, feature_idx] = radar[y_idx, x_idx]
+
+                reward = self.reward_calculator(action, state, game_states[i:])
+
+                y[i] = reward
 
         return x, y
 
@@ -441,6 +446,9 @@ class FeatureExtractor:
         initial_health = (action['armor_p'] + action['internal_p']) / 2
         final_health = initial_health
         for gs in game_states:
+            if not gs:
+                continue
+
             temp_round = gs[0]["round"]
             if temp_round == current_round + 1:
                 for unit in gs:
@@ -457,6 +465,8 @@ class FeatureExtractor:
         current_round = cls.round_from_state(state)
 
         for gs in game_states:
+            if not gs:
+                continue
             temp_round = gs[0]["round"]
             if temp_round == current_round + 1:
                 for unit in gs:
@@ -476,6 +486,8 @@ class FeatureExtractor:
         current_round = cls.round_from_state(state)
 
         for gs in game_states:
+            if not gs:
+                continue
             temp_round = gs[0]["round"]
             if temp_round == current_round + 1:
                 for unit in gs:
@@ -514,7 +526,7 @@ class FeatureExtractor:
         return mod
 
     @classmethod
-    def _closest_enemy(cls, action, state) -> tuple[float, dict]:
+    def _closest_enemy(cls, action, state) -> Tuple[float, Optional[dict]]:
         x = action.get("to_x", 0)
         y = action.get("to_y", 0)
         dist = float('inf')
@@ -524,6 +536,8 @@ class FeatureExtractor:
                 if (d := cls._distance(x, y, unit)) < dist:
                     dist = d
                     closest = unit
+        if dist == float('inf'):
+            return -1.0, None
         return dist, closest
 
     @classmethod
@@ -648,7 +662,7 @@ class FeatureExtractor:
         """
         unit_facing = action.get("facing", 0)
         threatening_enemies = cls._threatening_enemies(action, state)
-        unit_prefered_facing = cls._preferred_facing(action)
+        unit_preferred_facing = cls._preferred_facing(action)
 
         if threatening_enemies:
             dx = 0
@@ -660,7 +674,7 @@ class FeatureExtractor:
 
             dx /= n
             dy /= n
-            ideal_facing = ((int(np.arctan2(dy, dx) * 3 / np.pi) + 3) + unit_prefered_facing) % 6
+            ideal_facing = ((int(np.arctan2(dy, dx) * 3 / np.pi) + 3) + unit_preferred_facing) % 6
         else:
             ideal_facing = unit_facing
 
@@ -681,7 +695,8 @@ class FeatureExtractor:
         
         # Count enemies in range
         dist, enemy = cls._closest_enemy(action, state)
-
+        if dist == -1.0:
+            return 0.0
         # Normalize (capping at 5 enemies)
         return clamp01(1 - (dist / max_range))
 
@@ -1671,29 +1686,22 @@ class FeatureExtractor:
         max_range = action.get("max_range", 0)
         # Calculate score based on role
         role_score = 0.5  # Default
-        
-        if role == "SNIPER":
-            # Snipers prefer distance from enemies
-            dist, _ = cls._closest_enemy(action, state)
+        dist = cls._distance_from_closest_enemy(action, state)
+        if dist == -1.0:
+            return 0.0
+
+        if role == "SNIPER":  # Snipers prefer distance from enemies
             role_score = 1 - (abs(dist - (max_range * 0.7)) / (max_range * 0.3))
-        elif role == "STRIKER":
-            # Strikers prefer medium distance
-            dist, _ = cls._closest_enemy(action, state)
+        elif role == "STRIKER":  # Strikers prefer medium distance
             role_score = 1 - (dist / 10.0)
-        elif role == "JUGGERNAUT":
-            # Juggernauts prefer close combat
-            dist, _ = cls._closest_enemy(action, state)
+        elif role == "JUGGERNAUT":  # Juggernauts prefer close combat
             role_score = 1 - (dist / 7.0)
-        elif role == "MISSILE_BOAT":
-            # Missile boats like ranges that match their weapons
-            dist, _ = cls._closest_enemy(action, state)
+        elif role == "MISSILE_BOAT":  # Missile boats like ranges that match their weapons
             role_score = 1 - (abs(dist - max_range) / max_range)
-        elif role == "SCOUT":
-            # Scouts prefer high TMM and to be under low threat from enemy
+        elif role == "SCOUT":  # Scouts prefer high TMM and to be under low threat from enemy
             role_score = 1 / (len(cls._threatening_enemies(action, state)) + 1)
             role_score = role_score * cls._calculate_unit_tmm(action)
-        elif role == "BRAWLER":
-            # Brawlers prefer close combat with up to 3 units
+        elif role == "BRAWLER":  # Brawlers prefer close combat with up to 3 units
             role_score = 3 / (len(cls._threatening_enemies(action, state)) + 1)
         elif role == "SKIRMISHER":
             damage_ratio = cls._calculate_damage_ratio(action, state)
@@ -1701,11 +1709,10 @@ class FeatureExtractor:
             role_score = tmm_score * 0.6 + damage_ratio * 0.4
         elif role == "AMBUSHER":
             enemies_close_by = 1 / (len(cls._threatening_enemies(action, state)) + 1)
-            distance = cls._distance_from_closest_enemy(action, state)
             to_divide_for = min(7, action.get("max_range", 7))
-            role_score = clamp01(0.7 * enemies_close_by) * (clamp01(1 - (distance / to_divide_for)) * 0.3)
+            role_score = clamp01(0.7 * enemies_close_by) * (clamp01(1 - (dist / to_divide_for)) * 0.3)
 
-        return role_score
+        return clamp01(role_score)
 
     @staticmethod
     def _calculate_unit_tmm(action):
@@ -1923,7 +1930,7 @@ class FeatureExtractor:
         Based on TurnsToEncounterCalculator.
         """
         closest_distance, enemy = cls._closest_enemy(action, state)
-        if closest_distance == float('inf'):
+        if closest_distance == -1.0:
             return -1.0  # No enemies
         
         # Estimate turns based on average movement per turn (e.g., 5 hexes)
@@ -2329,8 +2336,9 @@ class FeatureExtractor:
                 distance = np.sqrt((enemy_x - unit_x)**2 + (enemy_y - unit_y)**2)
                 
                 if distance <= max_range and enemy_role in preferred_targets:
-                    target_score = preferred_targets[enemy_role] * (1 - (distance / max_range))
-                    best_target_score = max(best_target_score, target_score)
+                    if max_range > 0 and distance > 0:
+                        target_score = preferred_targets[enemy_role] * (1 - (distance / max_range))
+                        best_target_score = max(best_target_score, target_score)
         
         return clamp01(best_target_score)
 
@@ -2606,7 +2614,7 @@ class FeatureExtractor:
         if current_state['heat_p'] > 0.9:
             reward -= 0.3
 
-        # Jumping heat efficiency (if jumping was more efficient than walking)
+        # Jumping-heat efficiency (if jumping was more efficient than walking)
         if action_taken['jumping'] and action_taken['distance'] > 0:
             heat_per_hex_jumped = action_taken['heat_p'] / action_taken['distance']
             walking_heat_per_hex = 0.05  # Approximate heat for walking 1 hex
@@ -2751,7 +2759,7 @@ class ClassifierFeatureExtractor(FeatureExtractor):
         This helps address class imbalance issues.
 
         Args:
-            y_train: One-hot encoded class labels
+            y: One-hot encoded class labels
 
         Returns:
             Dictionary mapping class indices to weights
@@ -2769,7 +2777,7 @@ class ClassifierFeatureExtractor(FeatureExtractor):
         }
 
         # Calculate class counts
-        class_counts = np.bincount(y_indices)
+        class_counts = np.bincount(y_indices).tolist()
         n_samples = len(y_indices)
 
         return {movement_classes_inverse[i]: count / n_samples for i, count in enumerate(class_counts)}
@@ -2811,21 +2819,28 @@ class ClassifierFeatureExtractor(FeatureExtractor):
         return class_weights
 
 
-    def extract_classification_features(self, unit_actions: List[Dict], game_states: List[List[Dict]],
-                                        game_board: Union[GameBoardRepr, Dict], tags: List[Tuple[int, List]], iteration=0):
+    def extract_classification_features(
+            self,
+            unit_actions: List[Dict],
+            game_states: List[List[Dict]],
+            game_board: Union[GameBoardRepr, Dict],
+            tags: List[Tuple[int, List]]
+    ):
         """
         Extract features and classify movements for unit actions and game states.
 
         Args:
             unit_actions: List of unit action dictionaries
             game_states: List of game state dictionaries
+            game_board: GameBoardRepr or dictionary representing the game board
+            tags: List of tuples containing unit IDs and their corresponding tags
 
         Returns:
             X: Feature matrix
             y: One-hot encoded class labels
         """
         # First extract basic features using parent class method
-        x, _ = super().extract_features(unit_actions, game_states, game_board, iteration)
+        x, _ = super().extract_features(unit_actions, game_states, game_board)
         y = self.one_hot_encoded_classification(tags)
 
         return x, y
@@ -2886,7 +2901,7 @@ class ClassifierFeatureExtractor(FeatureExtractor):
 
         # Visualize correlation matrix
         if visualize:
-            analyzer.visualize_correlation_matrix(corr_matrix, f'{len(X)}_{model}.png')
+            analyzer.visualize_correlation_matrix(corr_matrix, f'features={len(X[0])} data={len(X[0])}.png')
             correlation_table = analyzer.display_correlation_table(corr_matrix, top_n=20)
             print(correlation_table)
 
@@ -2901,9 +2916,9 @@ class ClassifierFeatureExtractor(FeatureExtractor):
 
             if visualize and importance_scores:
                 # Plot feature importance
-                importances = [(feature, score) for feature, score in importance_scores.items()]
-                importances.sort(key=lambda x: x[1], reverse=True)
-                top_features = importances[:20]  # Top 20 features
+                importance = [(feature, score) for feature, score in importance_scores.items()]
+                importance.sort(key=lambda x: x[1], reverse=True)
+                top_features = importance[:20]  # Top 20 features
 
                 plt.figure(figsize=(12, 8))
                 y_pos = np.arange(len(top_features))
@@ -2915,7 +2930,7 @@ class ClassifierFeatureExtractor(FeatureExtractor):
                 plt.xlabel('Feature Importance')
                 plt.title('Top 20 Most Important Features')
                 plt.tight_layout()
-                plt.savefig('feature_importance.png')
+                plt.savefig(f'importance top 20 features data={len(X[0])}.png')
                 plt.close()
 
                 print("Feature importance chart saved to feature_importance.png")

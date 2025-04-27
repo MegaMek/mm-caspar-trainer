@@ -1,11 +1,19 @@
+resources/.meks.tsv
 db_data/
 venv/
 checkpoints/
-datasets/**/*.tsv
-.datasets/
+
+datasets/*
+#!datasets/DECOMPRESS_IN_THIS_FOLDER.zip
+!datasets/README.md
+
+datasets_tagged/*
+!datasets_tagged/DECOMPRESS IN THIS FOLDER.zip
+!datasets_tagged/README.md
+data/*
+
 .creds
 .venv/
-resources/.meks.tsv
 *.tsv
 *.png
 *.npy
