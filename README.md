@@ -11,7 +11,7 @@ backend database.
 ### Prerequisites
 
 - Docker and Docker Compose
-- Python 3.11 or later
+- Python 3.11.9
 - Required Python packages (see `requirements.txt`)
 
 ### Installation
