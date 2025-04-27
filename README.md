@@ -174,6 +174,7 @@ The command line arguments are organized into mutually exclusive groups:
 ### Dataset Handling
 | Argument | Type | Description |
 |----------|------|-------------|
+| `--name-datasets` | flag | Rename the datasets in the datasets directory |
 | `--parse-datasets` | flag | Compile the datasets with pre-tags from the raw game action data |
 | `--extract-features` | flag | Extract features from datasets and create untagged training data |
 | `--test-size` | float | Percent from 0 to 1 of the dataset to use for testing |
