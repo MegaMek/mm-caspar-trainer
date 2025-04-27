@@ -27,11 +27,12 @@
 import json
 import os
 import math
-from typing import Tuple, List, Dict, Union
+from typing import Tuple, List, Dict, Union, Optional
 from enum import Enum
 import re
 
 import numpy as np
+from tqdm import tqdm
 
 from caspar.config import DATA_DIR, DATASETS_DIR, MEK_FILE, DATASETS_TAGGED_DIR
 from caspar.data.game_board import GameBoardRepr
@@ -56,9 +57,8 @@ class LineType(Enum):
 
 class ActionAndState:
     """Container for an action and its corresponding state"""
-    def __init__(self, round_number: int, board: GameBoardRepr, action: Dict, state_builders: List):
+    def __init__(self, round_number: int, action: Dict, state_builders: List):
         self.round_number = round_number
-        self.board = board
         self.action = action
         self.state_builders = state_builders
 
@@ -67,6 +67,65 @@ class ActionAndState:
         return [builder.build() for builder in self.state_builders]
 
 
+class LoadUnitState:
+
+    def __init__(self, *args, **kwargs): ...
+
+    def filter_unit_states(self, round_number: int, action: Dict, unit_states: List[Dict]) -> List[Dict]:
+        """
+        Returns the unit states
+        """
+        return unit_states
+
+    def new_instance(self, *args, **kwargs):
+        """
+        Returns a new instance of the LoadUnitState class
+        """
+        return LoadUnitState()
+
+
+class LoadUnitStateDoubleBlind(LoadUnitState):
+
+    def __init__(self,  *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.seed = kwargs.get('seed', 0)
+
+    def new_instance(self, *args, **kwargs):
+        """
+        Returns a new instance of the LoadUnitState class
+        """
+        return LoadUnitStateDoubleBlind(seed=kwargs.get('seed') or self.seed)
+
+    def filter_unit_states(self, round_number: int, action: Dict, unit_states: List[Dict]) -> List[Dict]:
+        """
+        Returns the unit states applying double-blind to the action and states.
+
+        Args:
+            round_number: The round number
+            action: The action dictionary
+            unit_states: The list of state builders
+
+        Returns:
+            List of delayed unit state builders
+        """
+        team_id = action['team_id']
+        np.random.seed(round_number + self.seed)
+        sensor_range_brackets = [16, 32, 48]
+        enemy_positions = [(state, np.random.choice(sensor_range_brackets, 1)[0]) for state in unit_states if state['team_id'] != team_id]
+        team_positions = [(state, np.random.choice(sensor_range_brackets, 1)[0]) for state in unit_states if state['team_id'] == team_id]
+
+        ret_states = []
+        for red, _ in enemy_positions:
+            for blue, sensor_range in team_positions:
+                distance = math.sqrt((red['x'] - blue['x']) ** 2 + (red['y'] - blue['x']) ** 2)
+
+                if distance < 9 or ((distance >= (sensor_range-16)) and (distance <= sensor_range)):
+                    ret_states.append(red)
+                    break
+
+        ret_states += [state for state, _ in team_positions]
+
+        return ret_states
 
 class DataLoader:
     """
@@ -105,7 +164,18 @@ class DataLoader:
                     "max_range":int(parts[6]),
                     "total_damage": int(parts[7]),
                     "role": parts[8],
+                    "armor_front": int(parts[9]) if len(parts) > 9 else int(parts[3]),
+                    "armor_right": int(parts[10]) if len(parts) > 10 else int(parts[3]),
+                    "armor_left": int(parts[11]) if len(parts) > 11 else int(parts[3]),
+                    "armor_back": int(parts[12]) if len(parts) > 12 else int(parts[3]),
+                    "arc_0": int(parts[13]) if len(parts) > 13 else int(parts[7]),
+                    "arc_1": int(parts[14]) if len(parts) > 14 else int(int(parts[7]) / 3 * 2),
+                    "arc_2": int(parts[15]) if len(parts) > 15 else int(int(parts[7]) / 6),
+                    "arc_3": int(parts[16]) if len(parts) > 16 else int(int(parts[7]) / 10),
+                    "arc_4": int(parts[17]) if len(parts) > 17 else int(int(parts[7]) / 6),
+                    "arc_5": int(parts[18]) if len(parts) > 18 else int(int(parts[7]) / 3 * 2)
                 }
+
 
         self.meks_extras = data
 
@@ -120,63 +190,68 @@ class DataLoader:
             The parser instance
         """
         try:
-            with open(file_path, 'r') as file:
+            with open(file_path, 'r', encoding='utf-8') as file:
                 lines = file.readlines()
-                content = ''.join(lines)
-                # Parse the game board first
-                self.game_board = GameBoardRepr(content)
-                print(f"Parsed game board: {self.game_board.width}x{self.game_board.height}")
+        except UnicodeDecodeError as e:
+            print(f"Error reading file {file_path}: UnicodeDecodeError. Skipping file.")
+            return None
 
-            self._action_and_states = list()
-            self.entities = dict()
+        self.game_board = GameBoardRepr(lines)
 
-            board = None
-            i = 0
-            while i < len(lines):
-                line = lines[i].strip()
+        self._action_and_states = list()
+        self.entities = dict()
 
-                # Skip empty lines
-                if not line:
-                    i += 1
-                    continue
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
 
-                # Check for action headers
-                if (line == LineType.MOVE_ACTION_HEADER_V1.value or
-                        self._matches_pattern(line, LineType.MOVE_ACTION_HEADER_V2.value) or
-                        self._matches_pattern(line, LineType.MOVE_ACTION_HEADER_V3.value)):
+            # Skip empty lines
+            if not line:
+                i += 1
+                continue
 
-                    # Parse action line
-                    i += 1
-                    if i >= len(lines):
+            # Check for action headers
+            if (line == LineType.MOVE_ACTION_HEADER_V1.value or
+                    self._matches_pattern(line, LineType.MOVE_ACTION_HEADER_V2.value) or
+                    self._matches_pattern(line, LineType.MOVE_ACTION_HEADER_V3.value)):
+
+                # Parse action line
+                i += 1
+                if i >= len(lines):
+                    break
+
+                action_line = lines[i].strip()
+                action = self._parse_unit_action(action_line.split('\t'))
+
+                # Parse state block
+                i += 1
+                if i >= len(lines):
+                    raise RuntimeError(f"Invalid line after action: {action_line}")
+
+                state_header = lines[i].strip()
+                if not (state_header == LineType.STATE_HEADER_V1.value or
+                        state_header == LineType.STATE_HEADER_V2.value or
+                        self._matches_pattern(state_header, LineType.STATE_HEADER_V3.value)):
+                    raise RuntimeError(f"Invalid state header after action: {state_header}")
+
+                states = []
+                current_round = None
+                i += 1
+
+                while i < len(lines):
+                    line = lines[i].strip()
+
+                    # Check for end of state block
+                    if not line or line.startswith(LineType.ACTION_HEADER.value) or line.startswith(
+                            LineType.ROUND.value):
                         break
 
-                    action_line = lines[i].strip()
-                    action = self._parse_unit_action(action_line.split('\t'))
-
-                    # Parse state block
-                    i += 1
-                    if i >= len(lines):
-                        raise RuntimeError(f"Invalid line after action: {action_line}")
-
-                    state_header = lines[i].strip()
-                    if not (state_header == LineType.STATE_HEADER_V1.value or
-                            state_header == LineType.STATE_HEADER_V2.value or
-                            self._matches_pattern(state_header, LineType.STATE_HEADER_V3.value)):
-                        raise RuntimeError(f"Invalid state header after action: {state_header}")
-
-                    states = []
-                    current_round = None
-                    i += 1
-
-                    while i < len(lines):
-                        line = lines[i].strip()
-
-                        # Check for end of state block
-                        if not line or line.startswith(LineType.ACTION_HEADER.value) or line.startswith(
-                                LineType.ROUND.value):
+                    line_split = line.split('\t')
+                    if not self.is_attack(line_split):
+                        try:
+                            _round, state = self._parse_unit_state(line_split)
+                        except RuntimeError:
                             break
-
-                        _round, state = self._parse_unit_state(line.split('\t'))
 
                         if current_round is None:
                             current_round = _round
@@ -184,23 +259,49 @@ class DataLoader:
                             raise RuntimeError("State block has inconsistent rounds")
 
                         states.append(state)
-                        i += 1
+                    i += 1
 
-                    if current_round is None:
-                        raise RuntimeError("State block has no valid states")
+                if current_round is None:
+                    raise RuntimeError("State block has no valid states")
 
-                    self._action_and_states.append(ActionAndState(current_round, None, action, states))
+                self._action_and_states.append(ActionAndState(current_round, action, states))
 
-                    # We're now at the next action header or at the end
-                    continue
+                # We're now at the next action header or at the end
+                continue
 
-                # If none of the above, move to next line
-                i += 1
+            # If none of the above, move to next line
+            i += 1
 
-            return self
+        return self
 
-        except Exception as e:
-            raise RuntimeError(f"Error reading file {file_path}: {str(e)}") from e
+    def is_attack(self, line_split: List[str]) -> bool:
+        """
+        Check if the line is an attack action.
+
+        Args:
+            line_split: The split line
+
+        Returns:
+            True if the line is an attack action, False otherwise
+        """
+        try:
+            # Check if the first three elements are integers (round, attacker ID, weapon ID)
+            int(line_split[0])
+            int(line_split[1])
+            int(line_split[2])
+            # 3, 4
+            int(line_split[5])
+            int(line_split[6])
+            int(line_split[7])
+            int(line_split[8])
+            int(line_split[9])
+
+            # If we've passed all checks, this is an attack line
+            return True
+        except (ValueError, IndexError):
+            return False
+
+
 
     @classmethod
     def _matches_pattern(cls, line: str, pattern) -> bool:
@@ -209,7 +310,10 @@ class DataLoader:
             return pattern.match(line) is not None
         return line.startswith(pattern)
 
-    def get_actions_and_states(self, as_dict: bool = True) -> Tuple[List[Dict], List[List[Dict]], Union[GameBoardRepr, Dict]]:
+    def get_actions_and_states(
+            self,
+            load_unit_state: LoadUnitState
+    ) -> Tuple[List[Dict], List[List[Dict]], Union[GameBoardRepr, Dict]]:
         """
         Returns the parsed actions and states in a format similar to the load_data method.
 
@@ -218,10 +322,16 @@ class DataLoader:
         """
         unit_actions = []
         game_states = []
-        game_board = self.game_board.to_dict() if as_dict else self.game_board
+        game_board = self.game_board.to_dict()
         for action_and_state in self._action_and_states:
             unit_actions.append(action_and_state.action)
-            game_states.append(action_and_state.states)
+            game_states.append(
+                load_unit_state.filter_unit_states(
+                    action_and_state.round_number,
+                    action_and_state.action,
+                    action_and_state.states
+                )
+            )
 
         return unit_actions, game_states, game_board
 
@@ -273,13 +383,13 @@ class DataLoader:
             'max_range': to_int(data[26]) if len(data) > 26 else mek.get("max_range", -1),
             'total_damage': to_int(data[27]) if len(data) > 27 else mek.get("total_damage", -1),
             'ecm': to_int(data[28]) if len(data) > 28 else mek.get("ecm", 0),
-            'type': to_int(data[29]) if len(data) > 29 else mek.get('type', "BipedMek"),
-            'role': to_int(data[30]) if len(data) > 30 else mek.get('role', None),
+            'type': data[29] if len(data) > 29 else mek.get('type', "BipedMek"),
+            'role': data[30] if len(data) > 30 else mek.get('role', None),
             'bv':  to_int(data[31]) if len(data) > 31 else mek.get('bv', -1),
-            'armor_front': to_int(data[32]) if len(data) > 32 else mek.get('armor_front', mek.get("armor", -1)),
-            'armor_right': to_int(data[33]) if len(data) > 33 else mek.get('armor_right', mek.get("armor", -1)),
-            'armor_left': to_int(data[34]) if len(data) > 34 else mek.get('armor_left', mek.get("armor", -1)),
-            'armor_back': to_int(data[35]) if len(data) > 35 else mek.get('armor_back', mek.get("armor", -1)),
+            'armor_front': to_float(data[32]) if len(data) > 32 else mek.get('armor_front', mek.get("armor", -1)),
+            'armor_right': to_float(data[33]) if len(data) > 33 else mek.get('armor_right', mek.get("armor", -1)),
+            'armor_left': to_float(data[34]) if len(data) > 34 else mek.get('armor_left', mek.get("armor", -1)),
+            'armor_back': to_float(data[35]) if len(data) > 35 else mek.get('armor_back', mek.get("armor", -1)),
             'arc_0': to_int(data[36]) if len(data) > 36 else mek.get('arc_0', mek.get("total_damage", -1)),
             'arc_1': to_int(data[37]) if len(data) > 37 else mek.get('arc_1', mek.get("total_damage", -1) / 3 * 2),
             'arc_2': to_int(data[38]) if len(data) > 38 else mek.get('arc_2', mek.get("total_damage", -1) / 6),
@@ -318,9 +428,9 @@ class DelayedUnitStateBuilder:
     def build(self) -> dict:
         data = self.__data.split("\t")
         try:
-            action = self.data_loader.entities.get(int(data[3]), None)
+            action = self.data_loader.entities.get(int(data[3]), {})
         except ValueError:
-            action = self.data_loader.entities.get(int(data[2]), None)
+            action = self.data_loader.entities.get(int(data[2]), {})
         mek = {}
         chassis = data[4]
         model = data[5]
@@ -368,31 +478,60 @@ class DelayedUnitStateBuilder:
         }
 
 
-
-def load_datasets():
+def load_datasets(double_blind: bool = False):
     game_states = []
     unit_actions = []
     game_boards = []
+    file_names = []
     data_loader = DataLoader(MEK_FILE)
     i = 0
+
     for root, _, files in os.walk(DATASETS_DIR):
-        for file in files:
-            file_path = os.path.join(root, file)
-            try:
-                loaded_unit_actions, loaded_game_states, loaded_game_board = data_loader.parse(file_path).get_actions_and_states()
-                if len(loaded_game_states) == 0:
+
+        filtered_files = [file for file in files if file.endswith(".tsv")]
+        if not filtered_files:
+            continue
+
+        with tqdm(total=len(filtered_files), desc=" " * 60) as t:
+
+            for file in filtered_files:
+                file_path = os.path.join(root, file)
+
+                desc_text = file_path[-60:] if len(file_path) > 60 else file_path + " " * (60 - len(file_path))
+                t.set_description(f"{desc_text}")
+                t.update()
+
+                loaded_unit_actions, loaded_game_states, loaded_game_board = load_dataset_from_file(data_loader, file_path, double_blind, seed=i)
+                if not loaded_unit_actions:
                     continue
+
                 unit_actions.append((i, loaded_unit_actions))
                 game_states.append((i, loaded_game_states))
                 game_boards.append((i, loaded_game_board))
-                print(f"Loaded {i} - Loaded file: {file_path}")
+                file_names.append(file)
                 i += 1
-            except Exception as e:
-                logger.error("Error when reading thing", e)
-                print(f"Failed to load {file_path}: {str(e)}")
 
-    return unit_actions, game_states, game_boards
+    return unit_actions, game_states, game_boards, file_names
 
+
+def load_dataset_from_file(
+        data_loader,
+        file_path,
+        double_blind: bool = False,
+        seed: int = 0
+):
+
+    parsed_data = data_loader.parse(str(file_path))
+
+    if parsed_data is None:
+        return None, None, None
+
+    unit_state_loader = LoadUnitState() if not double_blind else LoadUnitStateDoubleBlind(seed=seed)
+    loaded_unit_actions, loaded_game_states, loaded_game_board = parsed_data.get_actions_and_states(
+        unit_state_loader
+    )
+
+    return loaded_unit_actions, loaded_game_states, loaded_game_board
 
 
 def load_tagged_datasets_classifier():
@@ -401,26 +540,49 @@ def load_tagged_datasets_classifier():
     game_boards = []
     tags = []
     i = 0
-    for root, _, files in os.walk(DATASETS_TAGGED_DIR):
-        for file in files:
-            file_path = os.path.join(root, file)
-            try:
-                with (open(file_path, "r") as f):
-                    value = json.load(f)
+    stats = {
+        "total_actions": 0,
+        "total_actions_100q": 0,
+        "average_actions": 0,
+        "average_quality": 0,
+        "weighted_average_quality": 0.0
+    }
 
-                unit_actions.append((i, value["unitActions"]))
-                game_states.append((i, value["gameStates"]))
-                game_boards.append((i, value["gameBoard"]))
-                tags.append((i, value["tags"]))
-                print(f"Loaded {i} - Loaded file: {file_path}")
-                i += 1
-            except Exception as e:
-                logger.error("Error when reading thing", e)
-                print(f"Failed to load {file_path}: {str(e)}")
+    for root, _, files in os.walk(DATASETS_TAGGED_DIR):
+        with tqdm(total=len(files), desc=" " * 60) as t:
+            filtered_files = [file for file in files if file.endswith(".json")]
+
+            for file in filtered_files:
+                file_path = os.path.join(root, file)
+                try:
+                    with (open(file_path, "r", encoding='utf-8') as f):
+                        value = json.load(f)
+
+                    t.set_description("Loading ..." + file_path[-60:] if len(file_path) > 60 else file_path + " " * (60 - len(file_path)))
+                    t.update()
+
+                    _, quality_part, actions_part, _ = file.split("-")
+                    quality_value = int(quality_part.split("=")[-1])
+                    actions_value = int(actions_part.split("=")[-1])
+                    stats["total_actions"] += actions_value
+                    stats["average_actions"] += actions_value
+                    stats["average_quality"] += quality_value
+                    stats["weighted_average_quality"] += quality_value * actions_value
+                    stats["total_actions_100q"] += actions_value if quality_value == 100 else 0
+                    unit_actions.append((i, value["unitActions"]))
+                    game_states.append((i, value["gameStates"]))
+                    game_boards.append((i, value["gameBoard"]))
+                    tags.append((i, value["tags"]))
+
+                    i += 1
+                except Exception as e:
+                    logger.error("Error when reading thing", e)
+
+    stats["average_actions"] = stats["average_actions"] / i
+    stats["average_quality"] = stats["average_quality"] / i
+    stats["weighted_average_quality"] = stats["weighted_average_quality"] / stats["total_actions"]
 
     return unit_actions, game_states, game_boards, tags
-
-
 
 
 def load_data_as_numpy_arrays():

@@ -39,7 +39,7 @@ class TrainingDatasetProcessor:
         self.validation_percentage = validation_percentage
         self.random_state = random_state
 
-    def split_and_save(self):
+    def split_and_save(self, *args, **kwargs):
         # remove all indices from X that sum to 0
         # and remove the corresponding entries from Y
         clean_x = self.x[~np.all(self.x == 0, axis=1)]
@@ -84,7 +84,7 @@ class ClassificationTrainingDatasetProcessor(TrainingDatasetProcessor):
         non_zero_indices = ~np.all(self.x == 0, axis=1)
         clean_x = self.x[non_zero_indices]
         clean_y = self.y[non_zero_indices]
-
+        
         save_ratios = []
         for i in range(len(clean_x[0])):
             max_dim = np.max(clean_x[:, i])

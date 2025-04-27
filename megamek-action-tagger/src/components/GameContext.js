@@ -169,50 +169,51 @@ export const GameProvider = ({ children }) => {
       return false;
     }
   };
-const calculateQualityIndex = (unitActions, gameStates) => {
-  // Find which players are humans (we know these for certain)
-  const humanPlayers = new Set(
-    unitActions
-      .filter(action => action.is_bot === 0)
-      .map(action => action.player_id)
-  );
 
-  // Extract unique units from nested gameStates (array of arrays)
-  const uniqueUnits = gameStates.reduce((allUnits, gameStatesArray) => {
-    return gameStatesArray.reduce((units, gameState) => {
-      const unitKey = `${gameState.entity_id}`;
-      if (!units[unitKey]) {
-        units[unitKey] = {
-          isBot: !humanPlayers.has(gameState.player_id),
-          bv: gameState.bv || 0
-        };
-      }
-      return units;
-    }, allUnits);
-  }, {});
+  const calculateQualityIndex = (unitActions, gameStates) => {
+    // Find which players are humans (we know these for certain)
+    const humanPlayers = new Set(
+      unitActions
+        .filter(action => action.is_bot === 0)
+        .map(action => action.player_id)
+      );
 
-  // Sum BV for human and bot players
-  const { humanBV, botBV } = Object.values(uniqueUnits).reduce(
-    (totals, unit) => {
-      if (unit.isBot) {
-        totals.botBV += unit.bv;
-      } else {
-        totals.humanBV += unit.bv;
-      }
-      return totals;
-    },
-    { humanBV: 0, botBV: 0 }
-  );
+    // Extract unique units from nested gameStates (array of arrays)
+    const uniqueUnits = gameStates.reduce((allUnits, gameStatesArray) => {
+      return gameStatesArray.reduce((units, gameState) => {
+        const unitKey = `${gameState.entity_id}`;
+        if (!units[unitKey]) {
+          units[unitKey] = {
+            isBot: !humanPlayers.has(gameState.player_id),
+            bv: gameState.bv || 0
+          };
+        }
+        return units;
+      }, allUnits);
+    }, {});
 
-  // Calculate quality index
-  const adjustedBotBV = botBV * 2;
+    // Sum BV for human and bot players
+    const { humanBV, botBV } = Object.values(uniqueUnits).reduce(
+      (totals, unit) => {
+        if (unit.isBot) {
+          totals.botBV += unit.bv;
+        } else {
+          totals.humanBV += unit.bv;
+        }
+        return totals;
+      },
+      { humanBV: 0, botBV: 0 }
+    );
 
-  // Avoid division by zero
-  if (adjustedBotBV === 0) return 1;
+    // Calculate quality index
+    const adjustedBotBV = botBV * 2;
 
-  // Calculate ratio, cap between 0-100
-  return Math.floor((humanBV / adjustedBotBV) * 100);
-};
+    // Avoid division by zero
+    if (adjustedBotBV === 0) return 1;
+
+    // Calculate ratio, cap between 0-100
+    return Math.floor((humanBV / adjustedBotBV) * 100);
+  };
 
   // Export all data to JSON
   const exportAllData = () => {
