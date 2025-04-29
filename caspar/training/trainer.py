@@ -30,7 +30,6 @@ import mlflow
 import mlflow.tensorflow
 import numpy as np
 import tensorflow as tf
-from sklearn.metrics import classification_report, f1_score, precision_score, recall_score
 
 from caspar.model.model import CasparModel, CasparClassificationModel
 from caspar.config import CHECKPOINT_DIR

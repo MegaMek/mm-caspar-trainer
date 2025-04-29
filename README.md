@@ -49,7 +49,7 @@ backend database.
 ## Data Preparation
 
 Before training the model, you need to prepare the datasets. The `--data` flag initializes a new batch of data files by:
-1. Loading raw datasets from the directory specified in `caspar.config.DATASETS_DIR`
+1. Loading raw gameplay logs from the directory specified in `caspar.config.RAW_GAMEPLAY_LOGS_DIR`
 2. Extracting features using the `FeatureExtractor` class
 3. Splitting the data into training, validation, and test sets
 4. Saving the processed datasets for future use by training processes
@@ -59,13 +59,13 @@ for training, validation and test sets:
 
 ```bash
 # Generate tagged datasets
-python -m caspar.__main__ --parse-datasets
+python -m caspar --parse-datasets
 
 # Generate training data (using undersampling by default)
-python -m caspar.__main__ --extract-features
+python -m caspar --extract-features
 
 # Generate training data with oversampling
-python -m caspar.__main__ --extract-features --oversample
+python -m caspar --extract-features --oversample
 ```
 
 ### Data Directory Structure
@@ -75,6 +75,8 @@ The data directory should contain the following structure:
 caspar/
 ├── data (generated, used for training models)
 │   ├── _xx_xxxx_feature_statistics.csv 
+│   ├── LICENSE
+│   ├── README.md
 │   ├── class_info.json
 │   ├── min_max_feature_normalization.csv
 │   ├── x_test.npy
@@ -85,18 +87,23 @@ caspar/
 │   ├── y_test.npy
 │   ├── training_data.csv
 │   └── ...
-├── datasets (raw data)
+├── raw_gameplay_logs
+│   ├── LICENSE
+│   ├── README.md
 │   ├── human_games
-│   │   ├── game_actions_0.tsv
+│   │   ├── dataset q=100 a=0043 p=02 u=006 bv=009911 d=2025-04-15 t=15-18-20_7829.tsv
 │   │   └── ...
 │   └── human_vs_princess_games
-│       ├── game_actions_0.tsv
+│       ├── dataset q=007 a=0325 p=03 u=027 bv=042689 d=2025-03-26 t=02-20-57_9364.tsv
 │       └── ...
-├── resources (used to enrich older datasets, not provided here due)
+├── resources (used to enrich older datasets, generated from MegaMek)
+│   ├── LICENSE
 │   └── meks.tsv
-└── datasets_tagged (generated )
-    ├── dataset_0_64_actions.json
-    ├── dataset_0_108_actions.json
+└── datasets_tagged (generated)
+    ├── LICENSE
+    ├── README.md
+    ├── tagged dataset q=006 a=0033 p=01 u=004 bv=000900 d=2025-03-16 t=17-44-18_9083 id=252.json
+    ├── tagged dataset q=100 a=0144 p=02 u=012 bv=019971 d=2025-04-04 t=19-37-31_1047 id=148.json
     └── ...
 ```
 
@@ -129,13 +136,13 @@ Then we train the model with the data we just generated.
 
 ```bash
 # Train with default configuration
-python -m caspar.__main__ 
+python -m caspar 
 
 # Train with custom parameters
-python -m caspar.__main__ --epochs 100 --batch-size 64 --learning-rate 0.01 --dropout-rate 0.3 --hidden-layers 354 354
+python -m caspar --epochs 100 --batch-size 64 --learning-rate 0.01 --dropout-rate 0.3 --hidden-layers 354 354
 
 # Train with custom experiment name
-python -m caspar.__main__ --experiment-name "my-experiment" --run-name "test-run-1"
+python -m caspar --experiment-name "my-experiment" --run-name "test-run-1"
 ```
 
 ### Customizing Training Parameters
@@ -143,7 +150,7 @@ python -m caspar.__main__ --experiment-name "my-experiment" --run-name "test-run
 You can customize various training parameters:
 
 ```bash
-python __main__.py --epochs 100 --batch-size 64 --learning-rate 0.01 --dropout-rate 0.3 --hidden-layers 354 354
+python -m caspar --epochs 100 --batch-size 64 --learning-rate 0.01 --dropout-rate 0.3 --hidden-layers 354 354
 ```
 
 ### Hyperparameter Optimization
@@ -151,7 +158,7 @@ python __main__.py --epochs 100 --batch-size 64 --learning-rate 0.01 --dropout-r
 The framework includes hyperparameter optimization using Optuna:
 
 ```bash
-python __main__.py --optimize --n-trials 10 --n-jobs -1
+python -m caspar --optimize --n-trials 10 --n-jobs -1
 ```
 
 Options:
@@ -164,7 +171,7 @@ Options:
 Experiments are tracked using MLFlow. You can customize the experiment name:
 
 ```bash
-python __main__.py --experiment-name "my-experiment" --run-name "test-run-1"
+python -m caspar --experiment-name "my-experiment" --run-name "test-run-1"
 ```
 
 ## Command Line Arguments
@@ -238,23 +245,23 @@ A typical workflow might look like:
 2. Prepare the datasets:
    ```bash
    # Generate tagged datasets
-   python -m caspar.__main__ --parse-datasets
+   python -m caspar --parse-datasets
 
    # Generate training data (using undersampling by default)
-   python -m caspar.__main__ --extract-features
+   python -m caspar --extract-features
 
    # Or use oversampling to balance classes
-   python -m caspar.__main__ --extract-features --oversample
+   python -m caspar --extract-features --oversample
    ```
 
 3. [Optional] Run hyperparameter optimization:
    ```bash
-   python -m caspar.__main__ --optimize --n-trials 50 --n-jobs -1 --experiment-name "hyperparameter-search"
+   python -m caspar --optimize --n-trials 50 --n-jobs -1 --experiment-name "hyperparameter-search"
    ```
 
 4. Train the model with the parameters:
    ```bash
-   python -m caspar.__main__ --hidden-layers 1036 1036 130 518 340 130 65 130 --dropout-rate 0.18 --learning-rate 0.016 --epochs 500 --experiment-name final-model --run-name model-v1
+   python -m caspar --hidden-layers 1036 1036 130 518 340 130 65 130 --dropout-rate 0.18 --learning-rate 0.016 --epochs 500 --experiment-name final-model --run-name model-v1
    ```
 
 5. View the results in the MLFlow UI:
@@ -264,7 +271,7 @@ A typical workflow might look like:
 
 6. Test a model stored in S3 (actually it is stored locally in minIO, but anyway): 
    ```bash
-   python -m caspar.__main__ --s3-model s3://mybucket/path/to/model.h5
+   python -m caspar --s3-model s3://mybucket/path/to/model.h5
    ```
  
 ## Architecture

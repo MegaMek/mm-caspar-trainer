@@ -3,13 +3,15 @@ db_data/
 venv/
 checkpoints/
 .DS_Store
+!LICENSE
 
 datasets/*
-#!datasets/DECOMPRESS_IN_THIS_FOLDER.zip
+!datasets/DECOMPRESS IN THIS FOLDER.zip
 !datasets/README.md
+!datasets/LICENSE
 
 datasets_tagged/*
-!datasets_tagged/DECOMPRESS IN THIS FOLDER.zip
+!datasets_tagged/LICENSE
 !datasets_tagged/README.md
 data/*
 
