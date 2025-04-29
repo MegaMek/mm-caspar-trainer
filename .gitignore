@@ -2,6 +2,7 @@ resources/.meks.tsv
 db_data/
 venv/
 checkpoints/
+.DS_Store
 
 datasets/*
 #!datasets/DECOMPRESS_IN_THIS_FOLDER.zip

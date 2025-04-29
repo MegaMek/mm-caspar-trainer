@@ -294,7 +294,7 @@ def count_players(unit_states):
 def count_units(unit_states):
     units = set()
     for unit_state in unit_states:
-        if unit_state.get('entity_id') is not None:
+        if unit_state.get('entity_id'):
             units.add(unit_state['entity_id'])
     return len(units)
 
@@ -302,7 +302,7 @@ def count_units(unit_states):
 def count_bv(unit_states):
     bv = set()
     for unit_state in unit_states:
-        if unit_state.get('bv') is not None:
+        if unit_state.get('bv'):
             bv.add(unit_state['bv'])
     return sum(bv)
 
@@ -366,16 +366,16 @@ def tag_and_persist_dataset(game_boards_tuple, game_states_tuple, unit_actions_t
     with tqdm(total=len(unit_actions_tuple), desc="Tagging datasets") as t:
         for i in range(len(unit_actions_tuple)):
             file_path = file_names[i]
-            unit_states = [unit_state for unit_state in game_states_tuple[i][1]]
 
+            unit_states = [unit_state for unit_state in game_states_tuple[i][1][0]]
             players = count_players(unit_states)
             bots = count_bot_players(unit_states)
             units = count_units(unit_states)
             bv = count_bv(unit_states)
             quality = int(calculate_quality(unit_actions_tuple[i][1], game_states_tuple[i][1], game_boards_tuple[i][1]))
             
-            name = create_file(bv, file_path, players, quality, unit_actions_tuple[i][1], units,
-                               prefix="tagged dataset", extension="json", postfix=f" id={i + offset}")
+            name = create_file_name(bv, file_path, players, quality, unit_actions_tuple[i][1], units,
+                                    prefix="tagged dataset", extension="json", postfix=f"id={i + offset}")
 
             file = os.path.join(
                 DATASETS_TAGGED_DIR,
@@ -408,12 +408,14 @@ def tag_and_persist_dataset(game_boards_tuple, game_states_tuple, unit_actions_t
                 }, f)
 
 
-def create_file(bv, file_path, players, quality, unit_actions, units, prefix, extension, postfix: str = ""):
+def create_file_name(bv, file_path, players, quality, unit_actions, units, prefix, extension, postfix: str = ""):
     date_time = read_first_line(file_path).split(" ")[-1].strip().replace(":", "-")
     _date, _time = date_time.split("T")
     millis = _time.split(".")[1]
     _time = _time.split(".")[0] + "_" + millis[:4]
-    return f"{prefix} q={quality:03d} a={len(unit_actions):04d} p={players:02d} u={units:03d} bv={bv:06d} d={_date} t={_time} {postfix}.{extension}"
+    if postfix:
+        postfix = " " + postfix
+    return f"{prefix} q={quality:03d} a={len(unit_actions):04d} p={players:02d} u={units:03d} bv={bv:06d} d={_date} t={_time}{postfix}.{extension}"
 
 
 def make_test_train_val_data_classifier(oversample: bool):
@@ -480,8 +482,8 @@ def name_datasets():
                 bv = count_bv(unit_states)
                 quality = int(calculate_quality(loaded_unit_actions, loaded_game_states, loaded_game_board))
 
-                new_name = create_file(bv, file_path, players, quality, loaded_unit_actions, units, prefix="dataset",
-                                       extension="tsv")
+                new_name = create_file_name(bv, file_path, players, quality, loaded_unit_actions, units, prefix="dataset",
+                                            extension="tsv")
                 os.rename(file_path, new_name)
 
 

@@ -508,7 +508,7 @@ def load_datasets(double_blind: bool = False):
                 unit_actions.append((i, loaded_unit_actions))
                 game_states.append((i, loaded_game_states))
                 game_boards.append((i, loaded_game_board))
-                file_names.append(file)
+                file_names.append(file_path)
                 i += 1
 
     return unit_actions, game_states, game_boards, file_names
