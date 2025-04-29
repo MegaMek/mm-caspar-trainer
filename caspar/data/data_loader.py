@@ -34,7 +34,7 @@ import re
 import numpy as np
 from tqdm import tqdm
 
-from caspar.config import DATA_DIR, DATASETS_DIR, MEK_FILE, DATASETS_TAGGED_DIR
+from caspar.config import DATA_DIR, RAW_GAMEPLAY_LOGS_DIR, MEK_FILE, DATASETS_TAGGED_DIR
 from caspar.data.game_board import GameBoardRepr
 
 import logging
@@ -486,7 +486,7 @@ def load_datasets(double_blind: bool = False):
     data_loader = DataLoader(MEK_FILE)
     i = 0
 
-    for root, _, files in os.walk(DATASETS_DIR):
+    for root, _, files in os.walk(RAW_GAMEPLAY_LOGS_DIR):
 
         filtered_files = [file for file in files if file.endswith(".tsv")]
         if not filtered_files:
@@ -508,7 +508,7 @@ def load_datasets(double_blind: bool = False):
                 unit_actions.append((i, loaded_unit_actions))
                 game_states.append((i, loaded_game_states))
                 game_boards.append((i, loaded_game_board))
-                file_names.append(file)
+                file_names.append(file_path)
                 i += 1
 
     return unit_actions, game_states, game_boards, file_names

@@ -27,12 +27,11 @@
 import os
 
 # Data settings
+CHECKPOINT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "checkpoints")
 RESOURCES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources")
-DATASETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "datasets")
-DATASETS_UNTAGGED_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "datasets_untagged")
+RAW_GAMEPLAY_LOGS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "raw_gameplay_logs")
 DATASETS_TAGGED_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "datasets_tagged")
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-CHECKPOINT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "checkpoints")
 MEK_FILE = os.path.join(RESOURCES_DIR, "meks.tsv")
 DOTENV_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 

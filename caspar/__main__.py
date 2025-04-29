@@ -23,471 +23,244 @@
 #
 # Catalyst Game Labs and the Catalyst Game Labs logo are trademarks of
 # InMediaRes Productions, LLC.
-import argparse
 import json
 import os
-import tempfile
-from typing import List
 
-import boto3
-import numpy as np
 import tensorflow as tf
 from dotenv import load_dotenv
-from tqdm import tqdm
 
-from caspar.config import DATASETS_DIR, MEK_FILE, MODEL_CONFIG, TRAINING_CONFIG, MLFLOW_CONFIG, DOTENV_PATH, DATA_DIR, \
-    DATASETS_TAGGED_DIR
-from caspar.data.data_loader import load_datasets, load_data_as_numpy_arrays, load_tagged_datasets_classifier, \
-    DataLoader, load_dataset_from_file
+from caspar.cli import parse_args
+from caspar.common import make_test_train_val_data_classifier, make_tagged_datasets, name_datasets, load_model_from_s3
+from caspar.config import MODEL_CONFIG, TRAINING_CONFIG, MLFLOW_CONFIG, DOTENV_PATH, DATA_DIR
+from caspar.data.data_loader import load_data_as_numpy_arrays
 from caspar.data.feature_extractor import ClassifierFeatureExtractor
-from caspar.data.tagger import tag_action
-from caspar.data.training_dataset_processor import ClassificationTrainingDatasetProcessor
 from caspar.hyperparameter_search import optimize_architecture
 from caspar.model.model import CasparClassificationModel
 from caspar.training.trainer import ClassificationModelTrainer
-from caspar.utils.argparse_utils import ExclusiveArgumentGroup
 from caspar.utils.mlflow_utils import setup_mlflow
 
 load_dotenv(DOTENV_PATH)
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description='Train CASPAR neural network model')
-    parser.add_argument('--mekfile', type=str, default=MEK_FILE,
-                        help='Path to Mek file (txt)')
-    groups: List[ExclusiveArgumentGroup] = []
-    ###########
+class CasparTrainer:
+    def __init__(self, config=None):
+        self.model_config = config.get('model_config', MODEL_CONFIG.copy()) if config else MODEL_CONFIG.copy()
+        self.training_config = config.get('training_config',
+                                          TRAINING_CONFIG.copy()) if config else TRAINING_CONFIG.copy()
+        self.mlflow_config = config.get('mlflow_config', MLFLOW_CONFIG.copy()) if config else MLFLOW_CONFIG.copy()
+        self.model = None
+        self.trainer = None
 
-    dataset_group = ExclusiveArgumentGroup(parser, "Dataset Handling")
-    dataset_group.add_argument('--name-datasets', action='store_true',
-                               help='Rename the datasets in the datasets directory')
-    dataset_group.add_argument('--parse-datasets', action='store_true',
-                               help='Compile the datasets with pre-tags from the raw game action data')
-    dataset_group.add_argument('--test-size', type=float,
-                               help='Percent from 0 to 1 of the dataset to use for testing')
-    dataset_group.add_argument('--validation-size', type=float,
-                               help='Percent from 0 to 1 of the dataset to use for validation')
-    dataset_group.add_argument('--oversample', action='store_true',
-                               help='Oversample the training data to balance the classes, default behavior is to undersample')
-    feature_extraction_group = dataset_group.add_mutually_exclusive_group(required=False)
-    feature_extraction_group.add_argument('--extract-features', action='store_true',
-                                          help='Extract features from datasets and create untagged training data')
-    groups.append(dataset_group)
-    ###########
+    def update_config(self, config_updates):
+        """Update configuration with provided values"""
+        if 'model_config' in config_updates:
+            self.model_config.update(config_updates['model_config'])
+        if 'training_config' in config_updates:
+            self.training_config.update(config_updates['training_config'])
+        if 'mlflow_config' in config_updates:
+            self.mlflow_config.update(config_updates['mlflow_config'])
 
-    test_model_group = ExclusiveArgumentGroup(
-        parser, "Test Model", "Load a model and test it against the test and validation datasets")
-    test_model_group.add_argument('--s3-model', type=str, help='Path to trained model')
-    groups.append(test_model_group)
-    ###########
-
-    experiment_group = parser.add_argument_group(
-        "Experiment",
-        description="Setup name and experiment for training and/or optimization")
-    experiment_group.add_argument('--experiment-name', type=str,
-                                help='MLflow experiment name')
-    experiment_group.add_argument('--run-name', type=str, required=False,
-                                  help='Name of the run')
-    experiment_group.add_argument('--feature-correlation', action='store_true',
-                                  help='Check feature correlation')
-    experiment_group.add_argument('--model-name', type=str,
-                                  help='Name of the model')
-    ###########
-
-    training_group = ExclusiveArgumentGroup(parser, "Training And Model Architecture")
-    training_group.add_argument('--epochs', type=int,
-                        help='Number of training epochs')
-    training_group.add_argument('--dropout-rate', type=float,
-                        help='Dropout rate')
-    training_group.add_argument('--batch-size', type=int,
-                        help='Batch size for training')
-    training_group.add_argument('--learning-rate', type=float,
-                        help='Learning rate for optimization')
-    training_group.add_argument('--hidden-layers', nargs='+', type=int,
-                            help='Hidden layers formats')
-    groups.append(training_group)
-    ###########
-
-    hyperparameter_group = ExclusiveArgumentGroup(parser, "Hyperparameter Search")
-    hyperparameter_group.add_argument('--optimize', action='store_true',
-                                help='Run hyperparameter optimization')
-    hyperparameter_group.add_argument('--n-trials', type=int,
-                                help='Number of trials for hyperparameter optimization')
-    hyperparameter_group.add_argument('--n-jobs', type=int,
-                                help='Number of parallel jobs for optimization (-1 uses all cores)')
-    groups.append(hyperparameter_group)
-
-    args = parser.parse_args()
-
-    used_groups = []
-    for group in groups:
-        if any(getattr(args, arg) for arg in group.args):
-            used_groups.append(group.name)
-
-    if len(used_groups) > 1:
-        parser.error(
-            f"Arguments from mutually exclusive groups {', '.join(used_groups)} cannot be used simultaneously.")
-
-    return args
-
-
-def main():
-    args = parse_args()
-
-    if args.name_datasets:
-        name_datasets()
-        return
-
-    if args.model_name:
-        MLFLOW_CONFIG['model_name'] = args.model_name
-
-    if args.test_size:
-        TRAINING_CONFIG['test_size'] = args.test_size
-
-    if args.validation_size:
-        TRAINING_CONFIG['validation_size'] = args.validation_size
-
-    if args.epochs:
-        TRAINING_CONFIG['epochs'] = args.epochs
-
-    if args.dropout_rate:
-        MODEL_CONFIG['dropout_rate'] = args.dropout_rate
-
-    if args.batch_size:
-        TRAINING_CONFIG['batch_size'] = args.batch_size
-
-    if args.learning_rate:
-        MODEL_CONFIG['learning_rate'] = args.learning_rate
-
-    if args.hidden_layers:
-        MODEL_CONFIG['hidden_layers'] = args.hidden_layers
-
-    if args.run_name:
-        MLFLOW_CONFIG['run_name'] = args.run_name
-
-    if args.experiment_name:
-        MLFLOW_CONFIG['experiment_name'] = args.experiment_name
-
-    if args.parse_datasets:
+    def parse_datasets(self):
+        """Parse raw datasets into tagged datasets"""
         make_tagged_datasets()
         print("Finished compiling datasets into data")
-        return
 
-    if args.extract_features:
-        make_test_train_val_data_classifier(oversample=args.oversample if args.oversample else False)
+    def extract_features(self, oversample=False):
+        """Extract features from datasets to create training data"""
+        make_test_train_val_data_classifier(oversample=oversample)
         print("Finished extracting features")
-        return
 
-    # Set up MLflow
-    setup_mlflow(
-        tracking_uri=MLFLOW_CONFIG['tracking_uri'],
-        experiment_name=MLFLOW_CONFIG['experiment_name'],
-    )
+    def name_datasets(self):
+        """Rename datasets in the datasets directory"""
+        name_datasets()
 
-    run_name = MLFLOW_CONFIG['run_name']
-    experiment_name = MLFLOW_CONFIG['experiment_name']
-    model_name = MLFLOW_CONFIG['model_name']
-    batch_size = TRAINING_CONFIG['batch_size']
-    epochs = TRAINING_CONFIG['epochs']
-    learning_rate = MODEL_CONFIG['learning_rate']
-    dropout_rate = MODEL_CONFIG['dropout_rate']
-    hidden_layers = MODEL_CONFIG['hidden_layers']
-
-    x_train, x_val, x_test, y_train, y_val, y_test = load_data_as_numpy_arrays()
-
-    # Load class information
-    with open(os.path.join(DATA_DIR, 'class_info.json'), 'r') as f:
-        class_info = json.load(f)
-    num_classes = class_info['num_classes']
-
-    input_shape = x_train.shape[1]
-    print(f"Extracted {input_shape} features for {x_train.shape[0]} samples")
-    print(f"Classification model with {num_classes} movement classes")
-    print("Building model...")
-    print("Input shape:", input_shape, "Hidden layers:", hidden_layers)
-
-
-    if args.optimize:
-        hidden_layers, best_params = optimize_architecture(args, x_train, y_train, x_val, y_val,
-                                                           n_jobs=args.n_jobs or -1,
-                                                           n_trials=args.n_trials or 20,
-                                                           num_classes=num_classes)
-        print("Input shape:", input_shape, "Hidden layers:", input_shape, "x", len(hidden_layers))
-        dropout_rate = best_params['dropout_rate']
-        learning_rate = best_params['learning_rate']
-
-    model = CasparClassificationModel(
-        input_shape=input_shape,
-        num_classes=num_classes,
-        hidden_layers=hidden_layers,
-        dropout_rate=dropout_rate,
-    )
-
-    if args.s3_model:
-        pre_loaded_model = load_model_from_s3(args.s3_model)
-        model.set_model(pre_loaded_model)
-    else:
-        model.build_model()
-        optimizer = tf.keras.optimizers.legacy.Adagrad(learning_rate=learning_rate)
-        model.compile_model(optimizer=optimizer, loss='categorical_crossentropy')
-
-    model.summary()
-
-    # Train model
-    print("Training classification model...")
-    class_weights = ClassifierFeatureExtractor.create_class_weights(y_train)
-    print("Class weights:", class_weights)
-
-    trainer = ClassificationModelTrainer(
-        model=model,
-        experiment_name=experiment_name
-    )
-
-    if args.s3_model:
-        trainer.test(x_val, y_val, model_name=model_name, run_name=run_name, batch_size=batch_size)
-    else:
-        trainer.train(
-            x_train=x_train,
-            y_train=y_train,
-            x_val=x_val,
-            y_val=y_val,
-            epochs=epochs,
-            batch_size=batch_size,
-            model_name=model_name,
-            run_name=run_name,
-            class_weight=class_weights
+    def setup_mlflow(self):
+        """Set up MLflow for experiment tracking"""
+        setup_mlflow(
+            tracking_uri=self.mlflow_config['tracking_uri'],
+            experiment_name=self.mlflow_config['experiment_name'],
         )
 
-    ClassifierFeatureExtractor().analyze_features(x_val, y_val, model.model, visualize=True)
+    def load_data(self):
+        """Load training data from numpy arrays"""
+        x_train, x_val, x_test, y_train, y_val, y_test = load_data_as_numpy_arrays()
 
+        # Load class information
+        with open(os.path.join(DATA_DIR, 'class_info.json'), 'r') as f:
+            class_info = json.load(f)
+        num_classes = class_info['num_classes']
 
-def load_model_from_s3(address):
+        return x_train, x_val, x_test, y_train, y_val, y_test, num_classes
 
-    print(f"Loading model from {address}...")
-    # Parse S3 path
-    s3_path = address.replace("s3://", "")
-    bucket_name = s3_path.split("/")[0]
-    key = "/".join(s3_path.split("/")[1:])
+    def optimize_model(self, x_train, y_train, x_val, y_val, num_classes, n_jobs=-1, n_trials=20):
+        """Perform hyperparameter optimization"""
+        hidden_layers, best_params = optimize_architecture(
+            None,  # args not needed when passing parameters directly
+            x_train, y_train, x_val, y_val,
+            n_jobs=n_jobs,
+            n_trials=n_trials,
+            num_classes=num_classes
+        )
 
-    # Initialize S3 client
-    s3_client = boto3.client('s3')
+        # Update configuration with optimized parameters
+        self.model_config['hidden_layers'] = hidden_layers
+        self.model_config['dropout_rate'] = best_params['dropout_rate']
+        self.model_config['learning_rate'] = best_params['learning_rate']
 
-    # Create a temporary file
-    with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as temp_file:
-        temp_path = temp_file.name
+        print(f"Optimized model parameters: hidden_layers={hidden_layers}, "
+              f"dropout_rate={best_params['dropout_rate']}, "
+              f"learning_rate={best_params['learning_rate']}")
 
-        # Download model to the temporary file
-        s3_client.download_file(Bucket=bucket_name, Key=key, Filename=temp_path)
+        return hidden_layers, best_params
 
-        # Load model from the temporary file
-        return tf.keras.models.load_model(temp_path)
+    def build_model(self, input_shape, num_classes, load_from_s3=None):
+        """Build or load the model"""
 
+        self.model = CasparClassificationModel(
+            input_shape=input_shape,
+            num_classes=num_classes,
+            hidden_layers=self.model_config['hidden_layers'],
+            dropout_rate=self.model_config['dropout_rate'],
+        )
 
-def count_players(unit_states):
-    players = set()
-    for unit_state in unit_states:
-        if unit_state.get('player_id') is not None:
-            players.add(unit_state['player_id'])
-    return len(players)
-
-
-def count_units(unit_states):
-    units = set()
-    for unit_state in unit_states:
-        if unit_state.get('entity_id') is not None:
-            units.add(unit_state['entity_id'])
-    return len(units)
-
-
-def count_bv(unit_states):
-    bv = set()
-    for unit_state in unit_states:
-        if unit_state.get('bv') is not None:
-            bv.add(unit_state['bv'])
-    return sum(bv)
-
-
-def count_bot_players(unit_actions):
-    bot_players = set(
-        action['player_id'] for action in unit_actions
-        if action.get('is_bot') == 1
-    )
-
-    return len(bot_players)
-
-def calculate_quality(unit_actions, game_states, game_board):
-    """
-    Quality is calculated as the ratio of human players to bot players
-    in the game. The higher the ratio, the better the quality.
-    """
-
-    human_players = set(
-        action['player_id'] for action in unit_actions
-        if action.get('is_bot') == 0
-    )
-
-    unique_units = {}
-    for game_states_array in game_states:
-        for game_state in game_states_array:
-            unit_key = str(game_state.get('entity_id'))
-            if unit_key not in unique_units:
-                unique_units[unit_key] = {
-                    'isBot': game_state.get('player_id') not in human_players,
-                    'bv': game_state.get('bv', 0)
-                }
-
-    human_bv = 0
-    bot_bv = 0
-
-    for unit in unique_units.values():
-        if unit['isBot']:
-            bot_bv += unit['bv']
+        if load_from_s3:
+            pre_loaded_model = load_model_from_s3(load_from_s3)
+            self.model.set_model(pre_loaded_model)
         else:
-            human_bv += unit['bv']
+            self.model.build_model()
+            optimizer = tf.keras.optimizers.legacy.Adagrad(learning_rate=self.model_config['learning_rate'])
+            self.model.compile_model(optimizer=optimizer, loss='categorical_crossentropy')
 
-    # Mark datasets with low human player presence as lower quality
-    adjusted_bot_bv = bot_bv * 4
-    if adjusted_bot_bv == 0:
-        return 100
+        self.model.summary()
+        return self.model
 
-    return min((human_bv / adjusted_bot_bv * 100), 99)
+    def train_or_test_model(self, x_train, y_train, x_val, y_val, load_from_s3=None):
+        """Train the model or test a pre-loaded model"""
+        class_weights = ClassifierFeatureExtractor.create_class_weights(y_train)
+        print("Class weights:", class_weights)
 
+        self.trainer = ClassificationModelTrainer(
+            model=self.model,
+            experiment_name=self.mlflow_config['experiment_name']
+        )
 
-def make_tagged_datasets():
-    unit_actions_tuple, game_states_tuple, game_boards_tuple, file_names = load_datasets(double_blind=False)
-    tag_and_persist_dataset(game_boards_tuple, game_states_tuple, unit_actions_tuple, file_names)
-
-    offset = len(unit_actions_tuple)
-    unit_actions_tuple, game_states_tuple, game_boards_tuple, file_names = load_datasets(double_blind=True)
-    tag_and_persist_dataset(game_boards_tuple, game_states_tuple, unit_actions_tuple, file_names, offset=offset)
-
-
-def tag_and_persist_dataset(game_boards_tuple, game_states_tuple, unit_actions_tuple, file_names, offset = 0):
-    with tqdm(total=len(unit_actions_tuple), desc="Tagging datasets") as t:
-        for i in range(len(unit_actions_tuple)):
-            file_path = file_names[i]
-            unit_states = [unit_state for unit_state in game_states_tuple[i][1]]
-
-            players = count_players(unit_states)
-            bots = count_bot_players(unit_states)
-            units = count_units(unit_states)
-            bv = count_bv(unit_states)
-            quality = int(calculate_quality(unit_actions_tuple[i][1], game_states_tuple[i][1], game_boards_tuple[i][1]))
-            
-            name = create_file(bv, file_path, players, quality, unit_actions_tuple[i][1], units,
-                               prefix="tagged dataset", extension="json", postfix=f" id={i + offset}")
-
-            file = os.path.join(
-                DATASETS_TAGGED_DIR,
-                name
+        if load_from_s3:
+            self.trainer.test(
+                x_val, y_val,
+                model_name=self.mlflow_config['model_name'],
+                run_name=self.mlflow_config['run_name'],
+                batch_size=self.training_config['batch_size']
+            )
+        else:
+            self.trainer.train(
+                x_train=x_train,
+                y_train=y_train,
+                x_val=x_val,
+                y_val=y_val,
+                epochs=self.training_config['epochs'],
+                batch_size=self.training_config['batch_size'],
+                model_name=self.mlflow_config['model_name'],
+                run_name=self.mlflow_config['run_name'],
+                class_weight=class_weights
             )
 
-            filepath = os.path.join(DATASETS_TAGGED_DIR, file)
-            desc_text = filepath[-60:] + " " * (60 - len(filepath[-60:]))
+        return self.trainer
 
-            t.set_description("Tagging: " + desc_text)
-            t.update()
+    def analyze_features(self, x_val, y_val):
+        """Analyze feature importance"""
+        return ClassifierFeatureExtractor().analyze_features(x_val, y_val, self.model.model, visualize=True)
 
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump({
-                    "unitActions": unit_actions_tuple[i][1],
-                    "gameStates": game_states_tuple[i][1],
-                    "gameBoard": game_boards_tuple[i][1],
-                    "tags": tag_action(unit_actions_tuple[i][1], game_states_tuple[i][1], game_boards_tuple[i][1]),
-                    "notes": "original file name: " + file_path,
-                    "properties": {
-                        "id": i+offset,
-                        "quality": quality,
-                        "players": players,
-                        "bots": bots,
-                        "human_players": players - bots,
-                        "board_size": game_boards_tuple[i][1],
-                        "units": units,
-                        "bv": bv,
-                    },
-                }, f)
+    def run(self, args):
+        """Main execution method that handles the workflow based on arguments"""
+        # Handle dataset operations first (these return early)
+        if args.name_datasets:
+            self.name_datasets()
+            return
 
+        if args.parse_datasets:
+            self.parse_datasets()
+            return
 
-def create_file(bv, file_path, players, quality, unit_actions, units, prefix, extension, postfix: str = ""):
-    date_time = read_first_line(file_path).split(" ")[-1].strip().replace(":", "-")
-    _date, _time = date_time.split("T")
-    millis = _time.split(".")[1]
-    _time = _time.split(".")[0] + "_" + millis[:4]
-    return f"{prefix} q={quality:03d} a={len(unit_actions):04d} p={players:02d} u={units:03d} bv={bv:06d} d={_date} t={_time} {postfix}.{extension}"
+        if args.extract_features:
+            self.extract_features(oversample=args.oversample)
+            return
 
+        # Update configs from args
+        config_updates = self._extract_config_from_args(args)
+        self.update_config(config_updates)
 
-def make_test_train_val_data_classifier(oversample: bool):
-    unit_actions, game_states, game_boards, tags = load_tagged_datasets_classifier()
-    feature_extractor = ClassifierFeatureExtractor()
+        # Set up MLflow
+        self.setup_mlflow()
 
-    x_acc = []
-    y_acc = []
+        # Load data
+        x_train, x_val, x_test, y_train, y_val, y_test, num_classes = self.load_data()
 
-    for i in range(len(unit_actions)):
-        x, y = feature_extractor.extract_classification_features(unit_actions[i][1], game_states[i][1], game_boards[i][1], tags[i][1])
-        x_acc.append(x)
-        y_acc.append(y)
+        input_shape = x_train.shape[1]
+        print(f"Extracted {input_shape} features for {x_train.shape[0]} samples")
+        print(f"Classification model with {num_classes} movement classes")
+        print("Building model...")
+        print("Input shape:", input_shape, "Hidden layers:", self.model_config['hidden_layers'])
 
-    # Save number of classes for model configuration
-    num_classes = feature_extractor.num_classes
-    x = np.concatenate(x_acc)
-    y = np.concatenate(y_acc)
-    # Process and save the datasets
-    test_percentage = TRAINING_CONFIG["test_size"]
-    validation_percentage = TRAINING_CONFIG["validation_size"]
-    processor = ClassificationTrainingDatasetProcessor(x, y, test_percentage, validation_percentage, 7)
-    dataset_info = processor.split_and_save(oversample)
+        # Optimize if requested
+        if args.optimize:
+            self.optimize_model(
+                x_train, y_train, x_val, y_val,
+                num_classes,
+                n_jobs=args.n_jobs or -1,
+                n_trials=args.n_trials or 20
+            )
 
-    zero_value = feature_extractor.features_always_zero(dataset_info['x'])
-    feature_extractor.save_feature_statistics(dataset_info['x'], f"_00_{len(x)}_feature_statistics.csv", comments=", ".join(zero_value))
+        # Build model
+        self.build_model(input_shape, num_classes, load_from_s3=args.s3_model)
 
-    with open(os.path.join(DATA_DIR, 'class_info.json'), 'w') as f:
-        json.dump({
-            'num_classes': num_classes,
-            'class_mapping': feature_extractor.movement_classes
-        }, f)
+        # Train or test model
+        self.train_or_test_model(x_train, y_train, x_val, y_val, load_from_s3=args.s3_model)
 
-    classes_frequency = ClassifierFeatureExtractor.describe_class_frequency(dataset_info['y'])
-    print("Classes frequencies:", classes_frequency)
-    print(f"Feature matrix shape: {dataset_info['x'].shape}")
-    print(f"Class labels shape: {dataset_info['y'].shape}")
-    print(f"Number of movement classes: {num_classes}")
-    print(f"Training data shape: {dataset_info['x_train_shape']}")
-    print(f"Validation data shape: {dataset_info['x_val_shape']}")
-    print(f"Test data shape: {dataset_info['x_test_shape']}")
+        # Analyze features
+        self.analyze_features(x_val, y_val)
 
+    def _extract_config_from_args(self, args):
+        """Extract configuration updates from command line arguments"""
+        config_updates = {
+            'model_config': {},
+            'training_config': {},
+            'mlflow_config': {}
+        }
 
-def name_datasets():
-    data_loader = DataLoader(MEK_FILE)
-    for root, _, files in os.walk(DATASETS_DIR):
-        filtered_files = [file for file in files if file.endswith(".tsv")]
-        with tqdm(total=len(filtered_files), desc="Renaming dataset: ") as t:
-            for file in filtered_files:
-                file_path = os.path.join(root, file)
-                loaded_unit_actions, loaded_game_states, loaded_game_board = load_dataset_from_file(data_loader, file_path)
-                if not loaded_unit_actions:
-                    os.remove(file_path)
-                    continue
+        # Model config updates
+        if args.dropout_rate is not None:
+            config_updates['model_config']['dropout_rate'] = args.dropout_rate
+        if args.learning_rate is not None:
+            config_updates['model_config']['learning_rate'] = args.learning_rate
+        if args.hidden_layers is not None:
+            config_updates['model_config']['hidden_layers'] = args.hidden_layers
 
-                desc_text = file_path[-60:] + " " * (60 - len(file_path[-60:]))
-                t.set_description("Renaming dataset: " + desc_text)
-                t.update()
+        # Training config updates
+        if args.test_size is not None:
+            config_updates['training_config']['test_size'] = args.test_size
+        if args.validation_size is not None:
+            config_updates['training_config']['validation_size'] = args.validation_size
+        if args.epochs is not None:
+            config_updates['training_config']['epochs'] = args.epochs
+        if args.batch_size is not None:
+            config_updates['training_config']['batch_size'] = args.batch_size
 
-                unit_states = [unit_state for unit_state in loaded_game_states[0]]
+        # MLflow config updates
+        if args.model_name is not None:
+            config_updates['mlflow_config']['model_name'] = args.model_name
+        if args.run_name is not None:
+            config_updates['mlflow_config']['run_name'] = args.run_name
+        if args.experiment_name is not None:
+            config_updates['mlflow_config']['experiment_name'] = args.experiment_name
 
-                players = count_players(unit_states)
-                units = count_units(unit_states)
-                bv = count_bv(unit_states)
-                quality = int(calculate_quality(loaded_unit_actions, loaded_game_states, loaded_game_board))
-
-                new_name = create_file(bv, file_path, players, quality, loaded_unit_actions, units, prefix="dataset",
-                                       extension="tsv")
-                os.rename(file_path, new_name)
+        return config_updates
 
 
-def read_first_line(file_path):
-    with open(file_path, "r") as f:
-        return f.readline()
+def cli_entrypoint():
+    args = parse_args()
+    trainer = CasparTrainer()
+    trainer.run(args)
+
 
 if __name__ == "__main__":
-    main()
+    cli_entrypoint()
