@@ -1,4 +1,4 @@
-# Copyright (C) 2025-2025 The MegaMek Team. All Rights Reserved.
+# Copyright (C) 2025 The MegaMek Team. All Rights Reserved.
 #
 # This file is part of MM-Caspar-Trainer.
 #
@@ -35,8 +35,8 @@ from tqdm import tqdm
 
 from caspar.config import RAW_GAMEPLAY_LOGS_DIR, MEK_FILE, TRAINING_CONFIG, DOTENV_PATH, DATA_DIR, \
     DATASETS_TAGGED_DIR
-from caspar.data.data_loader import load_datasets, load_tagged_datasets_classifier, \
-    DataLoader, load_dataset_from_file
+from caspar.data.parser.log_parser import load_datasets, RawGameDataParser, load_dataset_from_file, \
+    load_tagged_datasets_classifier
 from caspar.data.feature_extractor import ClassifierFeatureExtractor
 from caspar.data.tagger import tag_action
 from caspar.data.training_dataset_processor import ClassificationTrainingDatasetProcessor
@@ -240,7 +240,7 @@ def make_test_train_val_data_classifier(oversample: bool):
 
 
 def name_datasets():
-    data_loader = DataLoader(MEK_FILE)
+    data_loader = RawGameDataParser(MEK_FILE)
     for root, _, files in os.walk(RAW_GAMEPLAY_LOGS_DIR):
         filtered_files = [file for file in files if file.endswith(".tsv")]
         with tqdm(total=len(filtered_files), desc="Renaming dataset: ") as t:

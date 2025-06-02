@@ -1,7 +1,10 @@
 resources/.meks.tsv
+resources/meks.tsv
 db_data/
 venv/
 checkpoints/
+!checkpoints/README.md
+scratch/
 .DS_Store
 !LICENSE
 

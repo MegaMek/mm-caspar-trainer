@@ -23,24 +23,22 @@
 #
 # Catalyst Game Labs and the Catalyst Game Labs logo are trademarks of
 # InMediaRes Productions, LLC.
-import mlflow
-from typing import Dict, Any, Optional
+import re
+import logging
+
+from caspar.data.parser.base_parser import BaseParser
+
+logger = logging.getLogger(__name__)
 
 
-def setup_mlflow(tracking_uri: Optional[str] = None, experiment_name: str = "caspar-model"):
-    """
-    Set up MLflow tracking.
-    
-    Args:
-        tracking_uri: URI for MLflow tracking server
-        experiment_name: Name for MLflow experiment
-    """
-    if tracking_uri:
-        mlflow.set_tracking_uri(tracking_uri)
-    
-    # Get or create experiment
-    experiment = mlflow.get_experiment_by_name(experiment_name)
-    if experiment is None:
-        mlflow.create_experiment(experiment_name)
-    mlflow.set_system_metrics_sampling_interval(10)
-    mlflow.set_experiment(experiment_name)
+class BoardParserV1(BaseParser):
+    TYPE = "BoardData"
+    HEADER = BaseParser.make_header_regex_for("board_name width height")
+    LINE = re.compile(r"Board #(?P<board_id>\d+)\s(?P<WIDTH>\d+)\s(?P<HEIGHT>\d+)")
+
+
+class BoardParserV2(BaseParser):
+    TYPE = "BoardData"
+    HEADER = BaseParser.make_header_regex_for("version board_name width height")
+    BaseParser.make_line_regex_for_groups(version_field="BoardData", line="version board_id width height")
+    VERSION = "31052025"

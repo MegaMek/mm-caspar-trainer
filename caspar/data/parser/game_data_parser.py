@@ -23,24 +23,8 @@
 #
 # Catalyst Game Labs and the Catalyst Game Labs logo are trademarks of
 # InMediaRes Productions, LLC.
-import mlflow
-from typing import Dict, Any, Optional
 
+import logging
 
-def setup_mlflow(tracking_uri: Optional[str] = None, experiment_name: str = "caspar-model"):
-    """
-    Set up MLflow tracking.
-    
-    Args:
-        tracking_uri: URI for MLflow tracking server
-        experiment_name: Name for MLflow experiment
-    """
-    if tracking_uri:
-        mlflow.set_tracking_uri(tracking_uri)
-    
-    # Get or create experiment
-    experiment = mlflow.get_experiment_by_name(experiment_name)
-    if experiment is None:
-        mlflow.create_experiment(experiment_name)
-    mlflow.set_system_metrics_sampling_interval(10)
-    mlflow.set_experiment(experiment_name)
+logger = logging.getLogger(__name__)
+

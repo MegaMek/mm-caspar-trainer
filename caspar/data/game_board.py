@@ -1,4 +1,4 @@
-# Copyright (C) 2025-2025 The MegaMek Team. All Rights Reserved.
+# Copyright (C) 2025 The MegaMek Team. All Rights Reserved.
 #
 # This file is part of MM-Caspar-Trainer.
 #
@@ -171,13 +171,18 @@ class GameBoardRepr:
         """Parse the game board data."""
         # Find and parse board dimensions
         for i, line in enumerate(lines):
-            if line.startswith("BOARD_NAME"):
+            if line.startswith("BOARD_NAME") or line.startswith("VERSION\tBOARD_NAME"):
                 # Next line contains dimensions
                 dim_line = lines[i + 1]
                 parts = dim_line.split('\t')
-                if len(parts) >= 3:
-                    self.width = int(parts[2]) # I inverted them both in the logger :facepalm:
-                    self.height = int(parts[1]) # I inverted them both in the logger :facepalm:
+                if len(parts) == 3:
+                    self.width = int(parts[1])
+                    self.height = int(parts[2])
+
+                if len(parts) == 4:
+                    self.width = int(parts[2])
+                    self.height = int(parts[3])
+
                 break
 
         # Initialize empty board
@@ -241,7 +246,7 @@ class GameBoardRepr:
             ] for row in self.hexes]
         }
 
-def parse_board_data(file_content: str) -> GameBoardRepr:
+def parse_board_data(file_content: list[str]) -> GameBoardRepr:
     """Parse board data from file content."""
     return GameBoardRepr(file_content)
 
@@ -250,7 +255,7 @@ def parse_board_data(file_content: str) -> GameBoardRepr:
 if __name__ == "__main__":
     # Replace with actual file reading or input text
     with open("map_data.txt", "r") as f:
-        data = f.read()
+        data = f.readlines()
 
     game_board = parse_board_data(data)
 
